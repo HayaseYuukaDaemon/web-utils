@@ -105,6 +105,17 @@ async def fetchProxy(sub_url: str) -> bytes | None:
 
 def processCNAProxy(origin_content_str: str) -> str:
     proxy_dict = yaml.safe_load(origin_content_str)
+    proxy_group_white_list = ('🚀 节点选择', '💬 Telegram')
+
+    diminish_proxy_groups = []
+
+    for proxy_group in proxy_dict['proxy-groups']:
+        if proxy_group['name'] not in proxy_group_white_list:
+            diminish_proxy_groups.append(proxy_group['name'])
+
+    proxy_dict['proxy-groups'] = list(filter(lambda pg: pg['name'] not in diminish_proxy_groups, proxy_dict['proxy-groups']))
+    proxy_dict['rules'] = list(filter(lambda r: r.split(',')[-1] not in diminish_proxy_groups, proxy_dict['rules']))
+
     select_proxy_group = next((item for item in proxy_dict['proxy-groups'] if '节点选择' in item["name"]), None)
     select_proxy_group_proxies = select_proxy_group['proxies']
     only_foreign_proxies = []
