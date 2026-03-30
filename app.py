@@ -117,6 +117,8 @@ def processCNAProxy(origin_content_str: str) -> str:
     proxy_dict['rules'] = list(filter(lambda r: r.split(',')[-1] not in diminish_proxy_groups, proxy_dict['rules']))
 
     select_proxy_group = next((item for item in proxy_dict['proxy-groups'] if '节点选择' in item["name"]), None)
+    china_proxy_group = next((item for item in proxy_dict['proxy-groups'] if '中国大陆' in item["name"]), None)
+    china_proxy_group['proxies'].insert(1, '🚀 节点选择')
     select_proxy_group_proxies = select_proxy_group['proxies']
     only_foreign_proxies = []
     into_foreign_region = False
