@@ -46,6 +46,8 @@ async def serve_static_protected(file_path: str, request: fastapi.Request):
     except Exception as e:
         logger.exception(f'Error in static file', exc_info=e)
         raise fastapi.HTTPException(status_code=404, detail="File not found")
+
+
 # --- 静态文件结束 ---
 
 
@@ -54,6 +56,8 @@ async def serve_static_protected(file_path: str, request: fastapi.Request):
          name='site.auth')
 async def auth():
     return fastapi.responses.HTMLResponse(content=Path('templates/auth.html').read_text(encoding='utf-8'))
+
+
 # --- 认证服务结束 ---
 
 
@@ -99,10 +103,36 @@ async def fetchProxy(sub_url: str) -> bytes | None:
     return None
 
 
+def processCNAProxy(origin_content_str: str) -> str:
+    proxy_dict = yaml.safe_load(origin_content_str)
+    select_proxy_group = next((item for item in proxy_dict['proxy-groups'] if '节点选择' in item["name"]), None)
+    select_proxy_group_proxies = select_proxy_group['proxies']
+    only_foreign_proxies = []
+    into_foreign_region = False
+    for proxy in select_proxy_group_proxies:
+        if not into_foreign_region:
+            if '国际' in proxy:
+                into_foreign_region = True
+            continue
+        only_foreign_proxies.append(proxy)
+    select_proxy_group['proxies'] = only_foreign_proxies.copy()
+    custom_proxy_group = {
+        'name': 'Google',
+        'type': 'select',
+        'proxies': only_foreign_proxies
+    }
+    custom_proxy_group['proxies'].insert(0, '🚀 节点选择')
+    proxy_dict['proxy-groups'].insert(1, custom_proxy_group)
+    addional_rules = ('DOMAIN-SUFFIX,google.com,Google', 'DOMAIN-SUFFIX,googleapis.com,Google')
+    for rule in addional_rules:
+        proxy_dict['rules'].insert(-1, rule)
+    return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
+
+
 @proxy_router.get('/sub',
                   name='proxy.get.sub',
                   dependencies=[fastapi.Depends(Authoricator([UserAbilities.PROXY_READ]))])
-async def handleSubProxies(sub_name: str = ''):
+async def handleSubProxies(sub_name: str = '', sub_config: str = ''):
     proxy_filename = Path('proxy_url')
     if sub_name:
         proxy_filename = Path(f'{sub_name}_{proxy_filename}')
@@ -113,7 +143,10 @@ async def handleSubProxies(sub_name: str = ''):
     if upstream_content is None:
         raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
                                     detail='详情见服务器log')
-    return fastapi.Response(upstream_content, media_type='application/x-yaml')
+    if sub_config == 'origin':
+        return fastapi.Response(upstream_content, media_type='application/x-yaml')
+    proceed_proxy = processCNAProxy(upstream_content.decode())
+    return fastapi.Response(proceed_proxy, media_type='application/x-yaml')
 
 
 @proxy_router.get('/',
@@ -240,6 +273,7 @@ async def deleteVaultKeyConfig(config_name: str):
         return fastapi.responses.Response(status_code=fastapi.status.HTTP_204_NO_CONTENT)
     config_filepath.unlink()
     return fastapi.responses.Response(status_code=fastapi.status.HTTP_204_NO_CONTENT)
+
 
 app.include_router(vault_router)
 # --- 密钥管理器结束 ---
