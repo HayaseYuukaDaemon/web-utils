@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixiv 图片评分系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: #333;
+        }
+
+        .container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .stat-value {
+            font-weight: bold;
+            font-size: 18px;
+            color: #667eea;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .image-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 30px;
+            min-height: 400px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .image-container img {
+            max-width: 100%;
+            max-height: 70vh;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+
+        .loading {
+            font-size: 18px;
+            color: #666;
+        }
+
+        .image-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .score-buttons {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+        }
+
+        .score-btn {
+            padding: 20px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .score-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .score-btn:active {
+            transform: translateY(0);
+        }
+
+        .score-btn.hate {
+            background: #ef4444;
+            color: white;
+        }
+
+        .score-btn.neutral {
+            background: #94a3b8;
+            color: white;
+        }
+
+        .score-btn.like {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .score-btn.love {
+            background: #10b981;
+            color: white;
+        }
+
+        .nav-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .nav-btn {
+            padding: 10px 20px;
+            font-size: 14px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .nav-btn:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .shortcut-hint {
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 Pixiv 图片评分系统</h1>
+            <div class="stats">
+                <div class="stat-item">
+                    <span class="stat-label">总图片:</span>
+                    <span class="stat-value" id="total-images">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">待评分:</span>
+                    <span class="stat-value" id="wait-count">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">已评分:</span>
+                    <span class="stat-value" id="done-count">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">当前进度:</span>
+                    <span class="stat-value" id="progress">-</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="image-container" id="image-container">
+                <div class="loading">加载中...</div>
+            </div>
+
+            <div class="controls">
+                <div class="score-buttons">
+                    <button class="score-btn hate" onclick="submitScore(0)">
+                        😡 讨厌<br><small>(按键 1)</small>
+                    </button>
+                    <button class="score-btn neutral" onclick="submitScore(1)">
+                        😐 中性<br><small>(按键 2)</small>
+                    </button>
+                    <button class="score-btn like" onclick="submitScore(2)">
+                        😊 有点感觉<br><small>(按键 3)</small>
+                    </button>
+                    <button class="score-btn love" onclick="submitScore(3)">
+                        😍 非常喜欢<br><small>(按键 4)</small>
+                    </button>
+                </div>
+
+                <div class="nav-buttons">
+                    <button class="nav-btn" onclick="loadImage(-1)">⬅️ 上一张</button>
+                    <button class="nav-btn" onclick="loadImage(0)">🔄 刷新</button>
+                    <button class="nav-btn" onclick="skipImage()">⏭️ 跳过</button>
+                </div>
+
+                <div class="shortcut-hint">
+                    💡 提示: 使用键盘 1-4 快速评分，← → 切换图片
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentOffset = 0;
+        let currentImage = null;
+
+        // 加载统计信息
+        async function loadStats() {
+            try {
+                const response = await fetch('/dataset/stats');
+                const stats = await response.json();
+
+                document.getElementById('total-images').textContent = stats.total_images;
+                document.getElementById('wait-count').textContent = stats.wait_count;
+                document.getElementById('done-count').textContent = stats.done_count;
+
+                const progress = stats.total_images > 0
+                    ? Math.round((stats.done_count / stats.total_images) * 100)
+                    : 0;
+                document.getElementById('progress').textContent = progress + '%';
+            } catch (error) {
+                console.error('加载统计信息失败:', error);
+            }
+        }
+
+        // 加载图片
+        async function loadImage(offset = 0) {
+            currentOffset = offset;
+            const container = document.getElementById('image-container');
+            container.innerHTML = '<div class="loading">加载中...</div>';
+
+            try {
+                const response = await fetch(`/dataset/image/info/offset/${offset}`);
+
+                if (!response.ok) {
+                    throw new Error('没有更多图片');
+                }
+
+                currentImage = await response.json();
+
+                container.innerHTML = `
+                    <div class="image-info">
+                        PID: ${currentImage.pid} | Page: ${currentImage.page_index}
+                    </div>
+                    <img src="${currentImage.image_url}" alt="Pixiv Image" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22><text x=%2250%%22 y=%2250%%22 text-anchor=%22middle%22>图片加载失败</text></svg>'">
+                `;
+            } catch (error) {
+                container.innerHTML = `<div class="loading">❌ ${error.message}</div>`;
+                showToast('加载失败: ' + error.message, 'error');
+            }
+        }
+
+        // 提交评分
+        async function submitScore(score) {
+            if (!currentImage) {
+                showToast('没有可评分的图片', 'error');
+                return;
+            }
+
+            const scoreLabels = ['讨厌', '中性', '有点感觉', '非常喜欢'];
+
+            try {
+                const response = await fetch('/dataset/judge', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        pid: currentImage.pid,
+                        page_index: currentImage.page_index,
+                        score: score
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showToast(`✅ 评分成功: ${scoreLabels[score]}`);
+
+                    // 显示维护信息
+                    if (result.maintenance) {
+                        const m = result.maintenance;
+                        if (m.fetched_works > 0 || m.deleted_images > 0) {
+                            let msg = '🔧 自动维护: ';
+                            if (m.fetched_works > 0) {
+                                msg += `拉取了 ${m.fetched_works} 份作品 (${m.fetched_images} 张图片) `;
+                            }
+                            if (m.deleted_images > 0) {
+                                msg += `清理了 ${m.deleted_images} 张图片`;
+                            }
+                            showToast(msg, 'info', 5000);
+                        }
+                    }
+
+                    // 刷新统计
+                    await loadStats();
+
+                    // 加载下一张
+                    await loadImage(0);
+                } else {
+                    showToast('❌ 评分失败', 'error');
+                }
+            } catch (error) {
+                console.error('评分失败:', error);
+                showToast('❌ 评分失败: ' + error.message, 'error');
+            }
+        }
+
+        // 跳过当前图片
+        function skipImage() {
+            loadImage(currentOffset + 1);
+        }
+
+        // 显示提示消息
+        function showToast(message, type = 'success', duration = 3000) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.remove();
+            }, duration);
+        }
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            // 数字键 1-4 评分
+            if (e.key >= '1' && e.key <= '4') {
+                submitScore(parseInt(e.key) - 1);
+            }
+            // 左箭头 - 上一张
+            else if (e.key === 'ArrowLeft') {
+                loadImage(currentOffset - 1);
+            }
+            // 右箭头 - 下一张
+            else if (e.key === 'ArrowRight') {
+                skipImage();
+            }
+            // 空格 - 跳过
+            else if (e.key === ' ') {
+                e.preventDefault();
+                skipImage();
+            }
+        });
+
+        // 页面加载时初始化
+        window.addEventListener('load', () => {
+            loadStats();
+            loadImage(0);
+        });
+    </script>
+</body>
+</html>

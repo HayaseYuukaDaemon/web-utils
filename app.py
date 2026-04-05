@@ -290,3 +290,15 @@ async def deleteVaultKeyConfig(config_name: str):
 
 app.include_router(vault_router)
 # --- 密钥管理器结束 ---
+
+# --- Dataset 评分系统 ---
+# 挂载 mock_r2 静态文件目录（用于本地开发）
+if Path('mock_r2').exists():
+    app.mount("/mock_r2", StaticFiles(directory="mock_r2"), name="mock_r2")
+    logger.info('已挂载 mock_r2 静态文件目录')
+
+# 包含 dataset 路由
+from dataset_api import dataset_router
+app.include_router(dataset_router)
+logger.info('已加载 dataset 路由')
+# --- Dataset 评分系统结束 ---

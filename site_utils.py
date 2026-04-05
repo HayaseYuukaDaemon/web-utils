@@ -18,6 +18,7 @@ class UserAbilities(enum.Enum):
     VAULT_READ = 'vault.read'
     VAULT_CREATE = 'vault.write'
     VAULT_DELETE = 'vault.delete'
+    DATASET_USE = 'dataset.use'  # 使用图片评分系统
 
 
 class UserInfo(BaseModel):

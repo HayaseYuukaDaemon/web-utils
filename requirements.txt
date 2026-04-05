@@ -1,5 +1,9 @@
 httpx[socks]
-PyYAML~=6.0.3
-fastapi~=0.128.0
-pydantic~=2.12.5
-colorlog~=6.10.1
+PyYAML
+fastapi
+pydantic
+colorlog
+pixivpy-async
+pillow
+tqdm
+natsort
