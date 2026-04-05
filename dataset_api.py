@@ -61,6 +61,7 @@ class StatsResponse(BaseModel):
     total_works: int
     wait_count: int
     done_count: int
+    delete_count: int
 
 
 @dataset_router.get('/image/offset/{offset}',
@@ -203,7 +204,16 @@ async def judge_image(request: JudgeRequest, background_tasks: BackgroundTasks):
     # 添加后台维护任务（不阻塞响应）
     background_tasks.add_task(run_maintenance_task)
     logger.info(f"[Judge] 评分成功: pid={request.pid}, page={request.page_index}, score={request.score}")
-
+    bookmark_error = None
+    if request.score > 1:
+        try:
+            await fetcher.pixiv.bookmark_illust(request.pid)
+        except Exception as e:
+            bookmark_error = e
+        if bookmark_error:
+            logger.warning('添加收藏失败', exc_info=bookmark_error)
+        else:
+            logger.info('已添加收藏')
     # 获取下一张待评分图片
     next_image = db.get_image_by_offset(0)
 
@@ -266,7 +276,8 @@ async def get_stats():
         total_images=stats['total_images'],
         total_works=stats['total_works'],
         wait_count=stats['wait_count'],
-        done_count=stats['done_count']
+        done_count=stats['done_count'],
+        delete_count=stats['delete_count']
     )
 
 

@@ -522,6 +522,10 @@ class BetterPixiv:
                                                     offset=offset)
             return search_result
 
+    async def bookmark_illust(self, illust_id: int):
+        async with ClientWrapper(self) as api:
+            return await api.illust_bookmark_add(illust_id)
+
 if __name__ == '__main__':
     async def test():
         bp = BetterPixiv(proxy='http://127.0.0.1:10809', refresh_token='a4TF-gC5kRkciAiZ5MhGUoVw6zb3AXO1M1DmnAeFGlk')

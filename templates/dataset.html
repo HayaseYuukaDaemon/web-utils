@@ -294,7 +294,7 @@
 
                 document.getElementById('total-images').textContent = stats.total_images;
                 document.getElementById('wait-count').textContent = stats.wait_count;
-                document.getElementById('done-count').textContent = stats.done_count;
+                document.getElementById('done-count').textContent = stats.done_count + stats.de;
 
                 const progress = stats.total_images > 0
                     ? Math.round((stats.done_count / stats.total_images) * 100)
