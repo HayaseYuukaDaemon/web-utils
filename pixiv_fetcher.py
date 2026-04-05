@@ -362,7 +362,7 @@ class PixivFetcher:
         self.logger.info(f'清理完成，删除了 {deleted_count} 张图片')
         return deleted_count
 
-    async def auto_maintenance(self, min_wait: int = 100, max_done: int = 100) -> dict:
+    async def auto_maintenance(self, min_wait: int = 150, max_done: int = 100) -> dict:
         """
         自动维护任务
 
@@ -384,7 +384,7 @@ class PixivFetcher:
         }
 
         # 根据 mock_mode 决定拉取数量
-        fetch_count = 10 if self.mock_mode else 100
+        fetch_count = 10 if self.mock_mode else 200
         self.logger.info(f'[自动维护] 当前模式: {"测试模式" if self.mock_mode else "生产模式"}，拉取数量: {fetch_count}')
 
         # 1. 确保待评分图片充足
