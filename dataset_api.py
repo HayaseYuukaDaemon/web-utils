@@ -5,7 +5,7 @@
 """
 
 import asyncio
-from fastapi import APIRouter, HTTPException, Response, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import RedirectResponse, FileResponse
 from pydantic import BaseModel
 
@@ -152,7 +152,6 @@ async def get_image(pid: int, page_index: int):
     raise HTTPException(status_code=500, detail="R2 未配置")
 
 
-
 # 后台维护任务
 async def run_maintenance_task():
     """后台执行维护任务"""
@@ -224,6 +223,32 @@ async def judge_image(request: JudgeRequest, background_tasks: BackgroundTasks):
 async def dataset_page():
     """渲染评分界面"""
     return FileResponse('templates/dataset.html')
+
+
+@dataset_router.post('/maintenance',
+                     dependencies=[Depends(Authoricator([UserAbilities.DATASET_USE]))])
+async def trigger_maintenance(background_tasks: BackgroundTasks):
+    """
+    手动触发维护任务
+
+    用于初始化或强制拉取图片
+    """
+    if maintenance_lock.locked():
+        return {
+            "success": False,
+            "message": "维护任务正在运行中",
+            "status": "running"
+        }
+
+    # 添加后台维护任务
+    background_tasks.add_task(run_maintenance_task)
+    logger.info("[手动维护] 已触发维护任务")
+
+    return {
+        "success": True,
+        "message": "维护任务已启动",
+        "status": "scheduled"
+    }
 
 
 @dataset_router.get('/stats',
