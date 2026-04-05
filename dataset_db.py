@@ -144,12 +144,12 @@ class DatasetDB:
                     """
                     UPDATE images
                     SET score = ?, judged_at = ?, status = 'done'
-                    WHERE pid = ? AND page_index = ? AND score IS NULL
+                    WHERE pid = ? AND page_index = ?
                     """,
                     (score, judged_at, pid, page_index)
                 )
                 if cursor.rowcount == 0:
-                    print(f"评分失败: pid={pid}, page={page_index} 不存在或已评分")
+                    print(f"评分失败: pid={pid}, page={page_index} 不存在")
                     return False
 
             print(f"评分成功: pid={pid}, page={page_index}, score={score}")
