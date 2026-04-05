@@ -61,7 +61,7 @@ class StatsResponse(BaseModel):
     total_works: int
     wait_count: int
     done_count: int
-    delete_count: int
+    deleted_count: int
 
 
 @dataset_router.get('/image/offset/{offset}',
@@ -277,7 +277,7 @@ async def get_stats():
         total_works=stats['total_works'],
         wait_count=stats['wait_count'],
         done_count=stats['done_count'],
-        delete_count=stats['delete_count']
+        deleted_count=stats['deleted_count']
     )
 
 
