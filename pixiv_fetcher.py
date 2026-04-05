@@ -404,9 +404,11 @@ class PixivFetcher:
         done_count = stats.get('done_count', 0)
         self.logger.info(f'[自动维护] 当前已评分图片: {done_count} 张')
 
+        keep_count = 50
+
         if done_count > max_done:
-            self.logger.info(f'[自动维护] 已评分图片过多，开始清理（保留最近 {max_done} 张）')
-            deleted = self.cleanup_done_images(max_done)
+            self.logger.info(f'[自动维护] 已评分图片过多，开始清理（保留最近 {keep_count} 张）')
+            deleted = self.cleanup_done_images(keep_count)
             result['deleted_images'] = deleted
             self.logger.info(f'[自动维护] 清理完成: 删除了 {deleted} 张图片')
         else:
