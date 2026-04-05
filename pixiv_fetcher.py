@@ -116,7 +116,7 @@ class PixivFetcher:
 
         Args:
             filename: 文件名，如 '12345678_p0.jpg'
-            status: 图片状态 ('wait' 或 'done')
+            status: 图片状态（已废弃，所有图片都在同一目录）
 
         Returns:
             R2 URL，如果未配置 R2 则返回 None
@@ -124,9 +124,8 @@ class PixivFetcher:
         if not self.r2_base_url:
             return None
 
-        # 构建 R2 路径: {base_url}/{path_prefix}/judge_{status}/{filename}
-        subdir = f'judge_{status}'
-        url = f"{self.r2_base_url.rstrip('/')}/{self.r2_path_prefix}/{subdir}/{filename}"
+        # 所有图片统一存储在 judge_wait 目录
+        url = f"{self.r2_base_url.rstrip('/')}/{self.r2_path_prefix}/judge_wait/{filename}"
         return url
 
     async def fetch_recommended_works(self, count: int = 100) -> list[WorkDetail]:
