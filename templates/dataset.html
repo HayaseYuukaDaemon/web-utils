@@ -297,7 +297,7 @@
                 document.getElementById('done-count').textContent = stats.done_count + stats.deleted_count;
 
                 const progress = stats.total_images > 0
-                    ? Math.round((stats.done_count / stats.total_images) * 100)
+                    ? Math.round(((stats.done_count + stats.deleted_count)/ stats.total_images) * 100)
                     : 0;
                 document.getElementById('progress').textContent = progress + '%';
             } catch (error) {
