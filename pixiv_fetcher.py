@@ -318,7 +318,7 @@ class PixivFetcher:
         new_wait_count = self.get_wait_count()
         self.logger.info(f'拉取后待评分图片数量: {new_wait_count}')
 
-    def cleanup_done_images(self, keep_count: int = 100) -> int:
+    def cleanup_done_images(self, keep_count: int = 50) -> int:
         """
         清理已评分图片（LRU 策略）
 
