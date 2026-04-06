@@ -332,7 +332,7 @@ class PixivFetcher:
         self.logger.info(f'清理完成，删除了 {deleted_count} 张图片')
         return deleted_count
 
-    async def auto_maintenance(self, min_wait: int | None, max_done: int | None = None) -> dict:
+    async def auto_maintenance(self, min_wait: int | None = None, max_done: int | None = None) -> dict:
         """
         自动维护任务
 
