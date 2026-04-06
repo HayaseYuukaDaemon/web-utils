@@ -6,9 +6,10 @@ import io
 import logging
 import os
 import zipfile
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Union
+from typing import Awaitable, Callable, Optional
+
 import natsort
 from PIL import Image
 from pixivpy_async import *
@@ -170,7 +171,7 @@ class ClientWrapper:
         else:
             self.pixiv.logger.debug(f'获取到上层BetterPixiv实例的at: {self.access_token}')
             aapi.set_auth(refresh_token=self.refresh_token, access_token=self.access_token)
-        self.pixiv.api = self
+        self.pixiv.api = aapi
         return aapi
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -211,7 +212,7 @@ class BetterPixiv:
             try:
                 return await func(self, *args, **kwargs)
             except PixivError:
-                self.access_token = None
+                self.api = None
                 return await func(self, *args, **kwargs)
 
         return wrapper
@@ -529,8 +530,6 @@ class BetterPixiv:
 if __name__ == '__main__':
     async def test():
         bp = BetterPixiv(proxy='http://127.0.0.1:10809', refresh_token='a4TF-gC5kRkciAiZ5MhGUoVw6zb3AXO1M1DmnAeFGlk')
-        import json
-        with open('rec.json', 'w', encoding='utf-8') as f:
-            json.dump([asdict(wg) for wg in await bp.get_recommended_illusts()], f, ensure_ascii=False, indent=2)
+        print(await bp.bookmark_illust(141558658))
 
     asyncio.run(test())
