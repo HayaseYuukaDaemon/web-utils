@@ -169,7 +169,7 @@ async def run_maintenance_task():
 
         try:
             if fetcher:
-                result = await fetcher.auto_maintenance(min_wait=100, max_done=100)
+                result = await fetcher.auto_maintenance()
                 logger.info(f"[维护任务] 维护完成: {result}")
             else:
                 logger.warning("[维护任务] Fetcher 未初始化，跳过维护")

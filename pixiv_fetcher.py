@@ -5,9 +5,9 @@ Pixiv 作品拉取模块
 """
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Optional
+
 import yaml
 
 from better_pixiv import BetterPixiv, WorkDetail
@@ -25,6 +25,7 @@ class PixivFetcher:
                  db_path: str = "dataset.db",
                  r2_base_url: Optional[str] = None,
                  r2_path_prefix: str = "pixiv_dataset",
+                 counts_config: dict | None = None,
                  mock_mode: bool = True):
         """
         初始化拉取器
@@ -46,6 +47,7 @@ class PixivFetcher:
         self.r2_base_url = r2_base_url
         self.r2_path_prefix = r2_path_prefix
         self.mock_mode = mock_mode
+        self.counts_config = counts_config
 
         # 确保存储目录存在
         if not self.storage_path.exists():
@@ -107,6 +109,7 @@ class PixivFetcher:
             db_path=config.get('db_path', 'dataset.db'),
             r2_base_url=r2_base_url,
             r2_path_prefix=r2_config.get('path_prefix', 'pixiv_dataset'),
+            counts_config=config.get('counts_config', {}),
             mock_mode=mock_mode
         )
 
@@ -128,7 +131,7 @@ class PixivFetcher:
         url = f"{self.r2_base_url.rstrip('/')}/{self.r2_path_prefix}/judge_wait/{filename}"
         return url
 
-    async def fetch_recommended_works(self, count: int = 100) -> list[WorkDetail]:
+    async def fetch_recommended_works(self, count: int) -> list[WorkDetail]:
         """
         拉取推荐作品
 
@@ -160,8 +163,6 @@ class PixivFetcher:
             # 避免请求过快
             await asyncio.sleep(1)
 
-        # 只返回需要的数量
-        works = works[:count]
         self.logger.info(f'[拉取] 拉取完成，共 {len(works)} 份作品')
         return works
 
@@ -232,7 +233,7 @@ class PixivFetcher:
         self.logger.info(f'[下载] 作品 {work.id} 处理完成: {success_count}/{work.page_count} 张图片已添加到数据库')
         return success_count
 
-    async def fetch_and_download(self, count: int = 100) -> dict:
+    async def fetch_and_download(self, count: int) -> dict:
         """
         拉取并下载推荐作品
 
@@ -288,37 +289,7 @@ class PixivFetcher:
         stats = self.db.get_stats()
         return stats.get('wait_count', 0)
 
-    async def maintain_wait_queue(self, min_count: int = 100, target_count: int = 150):
-        """
-        维护待评分队列
-
-        如果待评分图片少于 min_count，则拉取作品直到达到 target_count
-
-        Args:
-            min_count: 最小图片数量
-            target_count: 目标图片数量
-        """
-        wait_count = self.get_wait_count()
-        self.logger.info(f'当前待评分图片数量: {wait_count}')
-
-        if wait_count >= min_count:
-            self.logger.info(f'待评分图片充足，无需拉取')
-            return
-
-        # 计算需要拉取的作品数量（估算）
-        # 假设平均每个作品 1.5 张图片
-        needed_images = target_count - wait_count
-        needed_works = int(needed_images / 1.5) + 10  # 多拉取一些以确保达到目标
-
-        self.logger.info(f'需要拉取约 {needed_works} 份作品以达到目标 {target_count} 张图片')
-
-        await self.fetch_and_download(needed_works)
-
-        # 检查结果
-        new_wait_count = self.get_wait_count()
-        self.logger.info(f'拉取后待评分图片数量: {new_wait_count}')
-
-    def cleanup_done_images(self, keep_count: int = 50) -> int:
+    def cleanup_done_images(self, keep_count: int) -> int:
         """
         清理已评分图片（LRU 策略）
 
@@ -361,7 +332,7 @@ class PixivFetcher:
         self.logger.info(f'清理完成，删除了 {deleted_count} 张图片')
         return deleted_count
 
-    async def auto_maintenance(self, min_wait: int = 150, max_done: int = 100) -> dict:
+    async def auto_maintenance(self, min_wait: int | None, max_done: int | None = None) -> dict:
         """
         自动维护任务
 
@@ -375,7 +346,12 @@ class PixivFetcher:
             维护结果统计
         """
         self.logger.info('[自动维护] 开始执行自动维护任务')
-
+        if min_wait is None:
+            min_wait = self.counts_config.get('min_wait', 20)
+            self.logger.info(f'[自动维护] 默认或从配置文件加载 {min_wait=}')
+        if max_done is None:
+            max_done = self.counts_config.get('max_done', 100)
+            self.logger.info(f'[自动维护] 默认或从配置文件加载 {max_done=}')
         result = {
             'fetched_works': 0,
             'fetched_images': 0,
@@ -383,7 +359,7 @@ class PixivFetcher:
         }
 
         # 根据 mock_mode 决定拉取数量
-        fetch_count = 10 if self.mock_mode else 200
+        fetch_count = 10 if self.mock_mode else self.counts_config.get('fetch_count', 50)
         self.logger.info(f'[自动维护] 当前模式: {"测试模式" if self.mock_mode else "生产模式"}，拉取数量: {fetch_count}')
 
         # 1. 确保待评分图片充足
@@ -404,7 +380,7 @@ class PixivFetcher:
         done_count = stats.get('done_count', 0)
         self.logger.info(f'[自动维护] 当前已评分图片: {done_count} 张')
 
-        keep_count = 50
+        keep_count = self.counts_config.get('keep_count', 50)
 
         if done_count > max_done:
             self.logger.info(f'[自动维护] 已评分图片过多，开始清理（保留最近 {keep_count} 张）')
@@ -416,38 +392,3 @@ class PixivFetcher:
 
         self.logger.info(f'[自动维护] 维护任务完成: {result}')
         return result
-
-
-# 测试代码
-if __name__ == "__main__":
-    async def test():
-        # 从配置文件创建拉取器
-        try:
-            fetcher = PixivFetcher.from_config()
-        except FileNotFoundError:
-            # 如果配置文件不存在，使用硬编码配置（仅用于测试）
-            print("配置文件不存在，使用测试配置")
-            fetcher = PixivFetcher(
-                refresh_token='a4TF-gC5kRkciAiZ5MhGUoVw6zb3AXO1M1DmnAeFGlk',
-                proxy='http://127.0.0.1:10809',
-                storage_path=Path('judge_wait'),
-                db_path='dataset.db'
-            )
-
-        # 测试拉取 5 份作品
-        print("\n=== 测试拉取 5 份作品 ===")
-        stats = await fetcher.fetch_and_download(5)
-        print(f"拉取结果: {stats}")
-
-        # 测试维护队列
-        print("\n=== 测试维护队列 ===")
-        await fetcher.maintain_wait_queue(min_count=10, target_count=20)
-
-        # 查看数据库统计
-        print("\n=== 数据库统计 ===")
-        db_stats = fetcher.db.get_stats()
-        print(f"总图片数: {db_stats['total_images']}")
-        print(f"总作品数: {db_stats['total_works']}")
-        print(f"待评分: {db_stats['wait_count']}")
-
-    asyncio.run(test())
