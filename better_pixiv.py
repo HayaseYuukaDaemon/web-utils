@@ -4,51 +4,48 @@ import io
 import logging
 import os
 import zipfile
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Self, Union
+from typing import Awaitable, Callable, Union
+
 import natsort
 from PIL import Image
+from pydantic import BaseModel, ConfigDict, Field
 from pixivpy_async import *
 from tqdm import tqdm
 
 
-@dataclass
-class User:
+class User(BaseModel):
     id: int
     name: str
-    account: Optional[str] = field(default=None)
-    profile_image_urls: Optional[list[str]] = field(default=None)
-    is_followed: Optional[bool] = field(default=None)
-    is_accept_request: Optional[bool] = field(default=None)
+    account: str | None = None
+    profile_image_urls: list[str] | None = None
+    is_followed: bool | None = None
+    is_accept_request: bool | None = None
 
 
-@dataclass
-class Tag:
+class Tag(BaseModel):
     name: str
-    translated_name: Optional[str] = field(default=None)
+    translated_name: str | None = None
 
 
-@dataclass
-class MetaSinglePage:
-    original_image_url: Optional[str] = field(default=None)  # 设为可选，兼容空对象
+class MetaSinglePage(BaseModel):
+    original_image_url: str | None = None
 
 
-@dataclass
-class MetaPageImageUrls:
+class MetaPageImageUrls(BaseModel):
     original: str
-    square_medium: Optional[str] = field(default=None)
-    medium: Optional[str] = field(default=None)
-    large: Optional[str] = field(default=None)
+    square_medium: str | None = None
+    medium: str | None = None
+    large: str | None = None
 
 
-@dataclass
-class MetaPage:
+class MetaPage(BaseModel):
     image_urls: MetaPageImageUrls
 
 
-@dataclass
-class WorkDetail:
+class WorkDetail(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+
     id: int
     title: str
     type: str
@@ -61,78 +58,31 @@ class WorkDetail:
     height: int
     total_view: int
     total_bookmarks: int
-    meta_single_page: Optional[MetaSinglePage] = field(default=None)
-    meta_pages: Optional[list[MetaPage]] = field(default=None)
-    sanity_level: Optional[int] = field(default=None)
-    x_restrict: Optional[int] = field(default=None)
-    restrict: Optional[int] = field(default=None)
-    is_bookmarked: Optional[bool] = field(default=None)
-    visible: Optional[bool] = field(default=None)
-    is_muted: Optional[bool] = field(default=None)
-    total_comments: Optional[int] = field(default=None)
-    illust_ai_type: Optional[int] = field(default=None)
-    illust_book_style: Optional[int] = field(default=None)
-    comment_access_control: Optional[int] = field(default=None)
-    restriction_attributes: Optional[list[str]] = field(default=None)
+    meta_single_page: MetaSinglePage | None = None
+    meta_pages: list[MetaPage] | None = None
+    sanity_level: int | None = None
+    x_restrict: int | None = None
+    restrict: int | None = None
+    is_bookmarked: bool | None = None
+    visible: bool | None = None
+    is_muted: bool | None = None
+    total_comments: int | None = None
+    illust_ai_type: int | None = None
+    illust_book_style: int | None = None
+    comment_access_control: int | None = None
+    restriction_attributes: list[str] | None = None
 
 
-def build_work_detail(work_dict: dict) -> WorkDetail:
-    meta_work_detail = WorkDetail(
-        id=work_dict['id'],
-        title=work_dict['title'],
-        type=work_dict['type'],
-        caption=work_dict['caption'],
-        user=User(
-            id=work_dict['user']['id'],
-            name=work_dict['user']['name'],
-            account=work_dict['user'].get('account', None),
-            profile_image_urls=work_dict['user'].get('profile_image_urls', None),
-            is_followed=work_dict['user'].get('is_followed', None),
-            is_accept_request=work_dict['user'].get('is_accept_request', None)
-        ),
-        tags=[
-            Tag(name=tag['name'], translated_name=tag.get('translated_name', None))
-            for tag in work_dict['tags']
-        ],
-        create_date=work_dict['create_date'],
-        page_count=work_dict['page_count'],
-        width=work_dict['width'],
-        height=work_dict['height'],
-        total_view=work_dict['total_view'],
-        total_bookmarks=work_dict['total_bookmarks'],
-        is_bookmarked=work_dict['is_bookmarked'],
-    )
-    meta_single_page: Optional[MetaSinglePage] = None
-    meta_pages: Optional[list[MetaPage]] = None
-    if 'meta_single_page' in work_dict and work_dict['meta_single_page']:
-        meta_single_page = MetaSinglePage(
-            original_image_url=work_dict['meta_single_page'].get('original_image_url')
-        )
-    if 'meta_pages' in work_dict and work_dict['meta_pages']:
-        meta_pages = [
-            MetaPage(
-                image_urls=MetaPageImageUrls(
-                    original=page['image_urls']['original']
-                )
-            )
-            for page in work_dict['meta_pages']
-        ]
-    meta_work_detail.meta_pages = meta_pages
-    meta_work_detail.meta_single_page = meta_single_page
-    return meta_work_detail
-
-
-@dataclass
-class DownloadResult:
-    task_id: int
-    total: int
-    extra_info: Optional[str]
-    failed_units: list[Union["DownloadResult", str]]
-    success_units: list[Union["DownloadResult", Path]]
+class DownloadResult(BaseModel):
+    task_id: int = 0
+    total: int = 0
+    extra_info: str | None = None
+    failed_units: list[Union[str, "DownloadResult"]] = Field(default_factory=list)
+    success_units: list[Union[Path, "DownloadResult"]] = Field(default_factory=list)
 
 
 class PixivError(Exception):
-    def __init__(self, message=''):
+    def __init__(self, message: str = ''):
         self.message = message
         super().__init__(self.message)
 
@@ -142,11 +92,11 @@ class IllustNotFoundError(PixivError):
 
 
 class ClientWrapper:
-    def __init__(self, pixiv):
+    def __init__(self, pixiv: "BetterPixiv"):
         self.pixiv = pixiv
         self.refresh_token: str = pixiv.refresh_token
-        self.access_token: Optional[str] = pixiv.access_token
-        self.proxy: Optional[str] = pixiv.proxy
+        self.access_token: str | None = pixiv.access_token
+        self.proxy: str | None = pixiv.proxy
         self.bypass: bool = pixiv.bypass
 
     async def __aenter__(self):
@@ -155,7 +105,7 @@ class ClientWrapper:
         self.client = PixivClient(proxy=self.proxy, bypass=self.bypass)
         aapi = AppPixivAPI(client=self.client.start())
         if self.access_token is None:
-            self.pixiv.logger.debug(f'无access token, 正在刷新')
+            self.pixiv.logger.debug('无access token, 正在刷新')
             access_json: dict = await aapi.login(refresh_token=self.refresh_token)
             access_token = access_json.get('access_token', None)
             if not access_json:
@@ -177,24 +127,24 @@ class ClientWrapper:
 
 
 class BetterPixiv:
-    def __init__(self, proxy=None,
-                 refresh_token: Optional[str] = None,
-                 storge_path: Path = None,
-                 bypass=False,
-                 logger: Optional[logging.Logger] = None,
-                 debug=False):
+    def __init__(self,
+                 proxy: str | None = None,
+                 refresh_token: str | None = None,
+                 storge_path: Path | None = None,
+                 bypass: bool = False,
+                 logger: logging.Logger | None = None,
+                 debug: bool = False):
         if refresh_token is None:
             raise PixivError('refresh_token is required')
         self.refresh_token = refresh_token
-        self.access_token: Optional[str] = None
+        self.access_token: str | None = None
         self.proxy = proxy
         self.bypass = bypass
         self.storge_path: Path = Path(os.path.curdir) if storge_path is None else storge_path
-        self.api: Optional[ClientWrapper] = None
-        self.viewed = None
+        self.api: ClientWrapper | None = None
+        self.viewed: list[int] | None = None
         if not logger:
             try:
-                # noinspection PyPackages
                 from .setup_logger import get_logger
             except ImportError:
                 from setup_logger import get_logger
@@ -203,14 +153,17 @@ class BetterPixiv:
             self.logger = logger
 
     @staticmethod
-    def retry_on_error(func):
+    def retry_on_error(func: Callable) -> Callable:
         @functools.wraps(func)
-        async def wrapper(self: Self, *args, **kwargs):
+        async def wrapper(*args, **kwargs):
             try:
-                return await func(self, *args, **kwargs)
+                return await func(*args, **kwargs)
             except PixivError:
-                self.access_token = None
-                return await func(self, *args, **kwargs)
+                # 获取 self（第一个参数）
+                self_arg = args[0] if args else None
+                if self_arg and hasattr(self_arg, 'access_token'):
+                    self_arg.access_token = None
+                return await func(*args, **kwargs)
 
         return wrapper
 
@@ -233,12 +186,13 @@ class BetterPixiv:
                 self.storge_path = Path(os.path.curdir)
                 self.logger.warning('目录创建失败，将使用默认目录', e)
 
-    @retry_on_error
-    async def __download_single_file(self,
-                                     api: AppPixivAPI,
-                                     sem: asyncio.Semaphore,
-                                     url: str,
-                                     file_downloaded_callback: Optional[Callable[[str, bool], None]] = None) -> Path:
+    async def _download_single_file(
+            self,
+            api: AppPixivAPI,
+            sem: asyncio.Semaphore,
+            url: str,
+            file_downloaded_callback: Callable[[str, bool], None] | None = None,
+    ) -> Path:
         async with sem:
             filename = Path(url.split('/')[-1])
             file_path = self.storge_path / filename
@@ -256,33 +210,34 @@ class BetterPixiv:
             else:
                 raise PixivError(f"Download failed after retries: {url}")
 
-    async def __download_single_work(self,
-                                     api: AppPixivAPI,
-                                     work_details: WorkDetail,
-                                     sem: asyncio.Semaphore,
-                                     phase_callback: Optional[Callable[[int, str], None]] = None) -> DownloadResult:
-        download_result = DownloadResult(task_id=0, total=0, extra_info=None, failed_units=[], success_units=[])
+    async def _download_single_work(
+            self,
+            api: AppPixivAPI,
+            work_details: WorkDetail,
+            sem: asyncio.Semaphore,
+            phase_callback: Callable[[int, str], None] | None = None,
+    ) -> DownloadResult:
+        download_result = DownloadResult()
         if work_details.type not in ("illust", "ugoira"):
             download_result.extra_info = 'work不是illust或ugoria'
             return download_result
         if work_details.type == 'illust':
-            # 解析 URL 列表
-            work_url_list = []
+            work_url_list: list[str] = []
             if work_details.meta_pages:
-                work_url_list = [cop.image_urls.original for cop in work_details.meta_pages]
+                work_url_list = [mp.image_urls.original for mp in work_details.meta_pages]
             elif work_details.meta_single_page:
-                work_url_list.append(work_details.meta_single_page.original_image_url)
+                work_url_list.append(work_details.meta_single_page.original_image_url)  # type: ignore
             download_result.total = len(work_url_list)
 
             def _phase_callback(single_url: str, task_result: bool):
                 if task_result:
-                    download_result.success_units.append(Path(self.storge_path) / Path(os.path.basename(single_url)))
+                    download_result.success_units.append(self.storge_path / Path(os.path.basename(single_url)))
                 else:
                     download_result.failed_units.append(single_url)
                 if phase_callback:
                     phase_callback(work_details.id, single_url)
 
-            tasks = [self.__download_single_file(api, sem, url, _phase_callback) for url in work_url_list]
+            tasks = [self._download_single_file(api, sem, url, _phase_callback) for url in work_url_list]
             await asyncio.gather(*tasks)
         else:
             download_result.total = 1
@@ -292,7 +247,7 @@ class BetterPixiv:
             zip_path = self.storge_path / filename
             try:
                 if not zip_path.exists():
-                    if not await self.__download_single_file(sem, zip_url):
+                    if not await self._download_single_file(api, sem, zip_url):
                         download_result.failed_units.append(zip_url)
                         download_result.extra_info = f'Error in downloading {zip_url}'
                         return download_result
@@ -303,107 +258,107 @@ class BetterPixiv:
                 download_result.extra_info = str(e)
                 download_result.failed_units.append(zip_url)
                 return download_result
-                # 打开ZIP文件
             with zipfile.ZipFile(zip_path, 'r') as zip_file:
-                # 过滤出图片文件（假设支持的图片格式为 .png 和 .jpg）
                 image_files = [f for f in zip_file.namelist() if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
                 image_files = natsort.natsorted(image_files)
-                # 加载图片到内存
-                images = []
+                images: list[Image.Image] = []
                 for image_file in image_files:
                     with zip_file.open(image_file) as image_data:
                         images.append(Image.open(io.BytesIO(image_data.read())))
-            # 确保有图片文件
             if not images:
                 download_result.failed_units.append(zip_url)
                 download_result.extra_info = 'No images found in the ZIP file'
                 return download_result
-            # 将所有图片转换为 GIF 并保存
             gif_path = self.storge_path / Path(f'{filename}.gif')
             images[0].save(
                 gif_path,
                 save_all=True,
                 append_images=images[1:],
                 duration=100,
-                loop=1
+                loop=1,
             )
             zip_path.unlink()
             download_result.success_units.append(gif_path)
         return download_result
 
-    async def download(self, work_ids: list[WorkDetail],
-                       max_workers: int = 3,
-                       phase_callback: Optional[Callable[[int, str], None]] = None) -> DownloadResult:
+    async def download(
+            self,
+            work_ids: list[WorkDetail] | WorkDetail,
+            max_workers: int = 3,
+            phase_callback: Callable[[int, str], None] | None = None,
+    ) -> DownloadResult:
         if not isinstance(work_ids, list):
             work_ids = [work_ids]
-        download_result = DownloadResult(task_id=0, total=0, extra_info=None, failed_units=[], success_units=[])
+        download_result = DownloadResult()
         if len(work_ids) == 0:
             return download_result
-        assert isinstance(work_ids[0], WorkDetail)
         semaphore = asyncio.Semaphore(max_workers)
         download_result.total = len(work_ids)
         self.logger.info(f'启动下载任务, 目标ID数: {len(work_ids)}, 最大并发: {max_workers}')
-        pbar_works: Optional[tqdm] = None
+        pbar_works: tqdm | None = None
         if phase_callback is None:
             pbar_works = tqdm(total=len(work_ids), desc="[作品进度]", position=0, leave=True, colour='green')
 
-        def on_file_downloaded(work_id, url):
+        def on_file_downloaded(work_id: int, url: str):
             if phase_callback:
                 phase_callback(work_id, url)
 
         async with ClientWrapper(self) as api:
-            async def work_task_wrapper(wid):
-                res = await self.__download_single_work(
+            async def work_task_wrapper(wid: WorkDetail) -> DownloadResult:
+                res = await self._download_single_work(
                     api,
                     wid,
                     semaphore,
-                    phase_callback=on_file_downloaded
+                    phase_callback=on_file_downloaded,
                 )
                 if pbar_works:
-                    pbar_works.update(1)  # 完成一个作品，更新上面那个条
+                    pbar_works.update(1)
                 return res
 
-            tasks = [work_task_wrapper(work_id) for work_id in work_ids]
-            # noinspection PyTypeChecker
-            task_results: list[DownloadResult] = await asyncio.gather(*tasks)
+            task_results: list[DownloadResult] = await asyncio.gather(
+                *[work_task_wrapper(work_id) for work_id in work_ids]
+            )
             if pbar_works:
                 pbar_works.close()
 
             for task_result in task_results:
                 if task_result.total > 0 and task_result.total == len(task_result.success_units):
-                    download_result.success_units.append(task_result)  # 成功下载的作品数
+                    download_result.success_units.append(task_result)
                 else:
                     download_result.failed_units.append(task_result)
             return download_result
 
     @retry_on_error
-    async def get_work_details(self, work_id: int) -> Optional[WorkDetail]:
+    async def get_work_details(self, work_id: int) -> WorkDetail | None:
         async with ClientWrapper(self) as api:
             self.logger.debug(f'正在获取作品详情: {work_id}')
-            work_details_json = await api.illust_detail(work_id)
+            work_details_json: dict = await api.illust_detail(work_id)
             self.logger.debug(f'底层返回: {work_details_json}')
             if isinstance(work_details_json, str):
                 raise PixivError(work_details_json)
-            if work_details_json.get('error', None):
+            if work_details_json.get('error'):
                 if work_details_json['error']['user_message'] == 'ページが見つかりませんでした':
                     return None
                 raise PixivError(work_details_json)
             illust_detail_json = work_details_json['illust']
-            return build_work_detail(illust_detail_json)
+            return WorkDetail.model_validate(illust_detail_json)
 
     @retry_on_error
-    async def get_user_works(self, user_id: int,
-                             max_page_cnt: int = 0,
-                             hook_func: Optional[Callable[[list[WorkDetail], int], Awaitable[bool]]] = None) -> list:
+    async def get_user_works(
+            self,
+            user_id: int,
+            max_page_cnt: int = 0,
+            hook_func: Callable[[list[WorkDetail], int], Awaitable[bool]] | None = None,
+    ) -> list[WorkDetail]:
         user_work_list: list[WorkDetail] = []
         now_page = 1
-        work_offset: Optional[int] = None
+        work_offset: int | None = None
         try:
             async with ClientWrapper(self) as api:
                 while True:
                     works: dict = await api.user_illusts(user_id, offset=work_offset)
                     is_continue = True
-                    segment_works = [build_work_detail(fav_work) for fav_work in works['illusts']]
+                    segment_works = [WorkDetail.model_validate(fav_work) for fav_work in works['illusts']]
                     user_work_list += segment_works
                     if hook_func:
                         is_continue = await hook_func(segment_works, now_page)
@@ -416,25 +371,29 @@ class BetterPixiv:
                     work_offset = int(next_url[index:])
                     self.logger.debug(f'作品翻页中, {next_url=}')
                     await asyncio.sleep(0.5)
-                    if max_page_cnt:
-                        if now_page >= max_page_cnt:
-                            raise KeyError
+                    if max_page_cnt and now_page >= max_page_cnt:
+                        raise KeyError
                     now_page += 1
         except KeyError:
             return user_work_list
 
     @retry_on_error
-    async def get_favs(self, user_id: int,
-                       max_page_cnt: int = 0,
-                       hook_func: Optional[Callable[[list[WorkDetail], int], Awaitable[bool]]] = None) -> list[WorkDetail]:
+    async def get_favs(
+            self,
+            user_id: int,
+            max_page_cnt: int = 0,
+            hook_func: Callable[[list[WorkDetail], int], Awaitable[bool]] | None = None,
+    ) -> list[WorkDetail]:
         fav_list: list[WorkDetail] = []
         now_page = 1
-        max_mark = None
+        max_mark: str | None = None
         try:
             async with ClientWrapper(self) as api:
                 while True:
-                    favs: dict = await api.user_bookmarks_illust(user_id, max_bookmark_id=int(max_mark) if max_mark else None)
-                    segment_favs = [build_work_detail(fav_work) for fav_work in favs['illusts']]
+                    favs: dict = await api.user_bookmarks_illust(
+                        user_id, max_bookmark_id=int(max_mark) if max_mark else None
+                    )
+                    segment_favs = [WorkDetail.model_validate(fav_work) for fav_work in favs['illusts']]
                     fav_list += segment_favs
                     await asyncio.sleep(0.5)
                     is_continue = True
@@ -448,9 +407,8 @@ class BetterPixiv:
                     self.logger.debug(f'收藏翻页中, {next_url=}')
                     index = next_url.find('max_bookmark_id=') + len('max_bookmark_id=')
                     max_mark = next_url[index:]
-                    if max_page_cnt:
-                        if now_page >= max_page_cnt:
-                            raise KeyError
+                    if max_page_cnt and now_page >= max_page_cnt:
+                        raise KeyError
                     now_page += 1
         except KeyError:
             return fav_list
@@ -459,18 +417,19 @@ class BetterPixiv:
     async def get_new_works(self, user_id: int, id_anchor: int) -> list[WorkDetail]:
         new_works: list[WorkDetail] = []
 
-        async def work_hook(work_details: list[WorkDetail], page: int):
+        async def work_hook(work_details: list[WorkDetail], _page: int) -> bool:
             for work_detail in work_details:
                 if work_detail.id > id_anchor:
                     new_works.append(work_detail)
                 else:
                     return False
             return True
+
         await self.get_user_works(user_id, hook_func=work_hook)
         return new_works
 
     @retry_on_error
-    async def get_ranking(self, tag_filter='day_male'):
+    async def get_ranking(self, tag_filter: str = 'day_male') -> list[dict]:
         async with ClientWrapper(self) as api:
             rank_json = await api.illust_ranking(tag_filter)
             return rank_json.get('illusts', [])
@@ -480,19 +439,22 @@ class BetterPixiv:
             viewed = self.viewed
         async with ClientWrapper(self) as api:
             resp = await api.illust_recommended(content_type='illust', viewed=viewed)
-            recommended_illusts = [build_work_detail(work) for work in resp.get('illusts', [])]
+            recommended_illusts = [WorkDetail.model_validate(work) for work in resp.get('illusts', [])]
             self.viewed = [work.id for work in recommended_illusts]
             return recommended_illusts
 
     @retry_on_error
-    async def search_works(self, word,
-                           match_type='part',
-                           sort='date_desc',
-                           time_dist='month',
-                           start_date=None,
-                           end_date=None,
-                           min_marks=None,
-                           offset=None):
+    async def search_works(
+            self,
+            word: str,
+            match_type: str = 'part',
+            sort: str = 'date_desc',
+            time_dist: str = 'month',
+            start_date: str | None = None,
+            end_date: str | None = None,
+            min_marks: int | None = None,
+            offset: int | None = None,
+    ) -> dict:
         if offset == 0:
             offset = None
         if match_type == 'content':
@@ -512,17 +474,19 @@ class BetterPixiv:
         else:
             duration = 'within_last_month'
         async with ClientWrapper(self) as api:
-            search_result = await api.search_illust(word,
-                                                    search_target,
-                                                    sort,
-                                                    duration,
-                                                    min_bookmarks=min_marks,
-                                                    offset=offset)
-            return search_result
+            return await api.search_illust(
+                word,
+                search_target,
+                sort,
+                duration,
+                min_bookmarks=min_marks,
+                offset=offset,
+            )
 
     async def bookmark_illust(self, illust_id: int):
         async with ClientWrapper(self) as api:
             return await api.illust_bookmark_add(illust_id)
+
 
 if __name__ == '__main__':
     async def test():
