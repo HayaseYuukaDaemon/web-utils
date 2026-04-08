@@ -6,7 +6,7 @@ import os
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Self
+from typing import Awaitable, Callable, Optional, Self, Union
 import natsort
 from PIL import Image
 from pixivpy_async import *
@@ -127,8 +127,8 @@ class DownloadResult:
     task_id: int
     total: int
     extra_info: Optional[str]
-    failed_units: list["DownloadResult" | str]
-    success_units: list["DownloadResult" | Path]
+    failed_units: list[Union["DownloadResult", str]]
+    success_units: list[Union["DownloadResult", Path]]
 
 
 class PixivError(Exception):
