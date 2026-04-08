@@ -34,6 +34,7 @@ except Exception as e:
 
 # 维护任务锁（防止并发执行）
 maintenance_lock = asyncio.Lock()
+# 是否有维护任务正在运行
 maintenance_running = False
 
 
@@ -204,8 +205,10 @@ async def judge_image(request: JudgeRequest, background_tasks: BackgroundTasks):
     # 添加后台维护任务（不阻塞响应）
     background_tasks.add_task(run_maintenance_task)
     logger.info(f"[Judge] 评分成功: pid={request.pid}, page={request.page_index}, score={request.score}")
+
+    # 评分 >= 2 时自动收藏
     bookmark_error = None
-    if request.score > 1:
+    if request.score > 1 and fetcher:
         try:
             await fetcher.pixiv.bookmark_illust(request.pid)
         except Exception as e:
@@ -214,6 +217,7 @@ async def judge_image(request: JudgeRequest, background_tasks: BackgroundTasks):
             logger.warning('添加收藏失败', exc_info=bookmark_error)
         else:
             logger.info('已添加收藏')
+
     # 获取下一张待评分图片
     next_image = db.get_image_by_offset(0)
 
@@ -239,7 +243,7 @@ async def dataset_page():
                      dependencies=[Depends(Authoricator([UserAbilities.DATASET_USE]))])
 async def trigger_maintenance(background_tasks: BackgroundTasks):
     """
-    手动触发维护任务
+    手动触发维护任务（后台执行，不阻塞响应）
 
     用于初始化或强制拉取图片
     """

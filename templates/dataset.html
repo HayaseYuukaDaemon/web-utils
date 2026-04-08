@@ -359,22 +359,7 @@
                 if (result.success) {
                     showToast(`✅ 评分成功: ${scoreLabels[score]}`);
 
-                    // 显示维护信息
-                    if (result.maintenance) {
-                        const m = result.maintenance;
-                        if (m.fetched_works > 0 || m.deleted_images > 0) {
-                            let msg = '🔧 自动维护: ';
-                            if (m.fetched_works > 0) {
-                                msg += `拉取了 ${m.fetched_works} 份作品 (${m.fetched_images} 张图片) `;
-                            }
-                            if (m.deleted_images > 0) {
-                                msg += `清理了 ${m.deleted_images} 张图片`;
-                            }
-                            showToast(msg, 'info', 5000);
-                        }
-                    }
-
-                    // 刷新统计
+                    // 刷新统计（后台维护任务会自动更新数据）
                     await loadStats();
 
                     // 加载下一张

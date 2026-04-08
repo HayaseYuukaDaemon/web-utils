@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import functools
 import io
@@ -8,8 +6,7 @@ import os
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
-
+from typing import Awaitable, Callable, Optional, Self
 import natsort
 from PIL import Image
 from pixivpy_async import *
@@ -171,7 +168,7 @@ class ClientWrapper:
         else:
             self.pixiv.logger.debug(f'获取到上层BetterPixiv实例的at: {self.access_token}')
             aapi.set_auth(refresh_token=self.refresh_token, access_token=self.access_token)
-        self.pixiv.api = aapi
+        self.pixiv.api = self
         return aapi
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -208,11 +205,11 @@ class BetterPixiv:
     @staticmethod
     def retry_on_error(func):
         @functools.wraps(func)
-        async def wrapper(self, *args, **kwargs):
+        async def wrapper(self: Self, *args, **kwargs):
             try:
                 return await func(self, *args, **kwargs)
             except PixivError:
-                self.api = None
+                self.access_token = None
                 return await func(self, *args, **kwargs)
 
         return wrapper
@@ -530,6 +527,6 @@ class BetterPixiv:
 if __name__ == '__main__':
     async def test():
         bp = BetterPixiv(proxy='http://127.0.0.1:10809', refresh_token='a4TF-gC5kRkciAiZ5MhGUoVw6zb3AXO1M1DmnAeFGlk')
-        print(await bp.bookmark_illust(141558658))
+        print(await bp.bookmark_illust(134140980))
 
     asyncio.run(test())
