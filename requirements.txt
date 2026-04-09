@@ -5,5 +5,5 @@ pydantic
 colorlog
 pixivpy-async
 pillow
-tqdm
 natsort
+rich

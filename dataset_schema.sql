@@ -8,6 +8,7 @@
 
 -- 删除已存在的表（如果存在）
 DROP TABLE IF EXISTS images;
+DROP TABLE IF EXISTS bookmark_jobs;
 DROP VIEW IF EXISTS score_stats;
 DROP VIEW IF EXISTS daily_stats;
 
@@ -44,7 +45,7 @@ CREATE TABLE images (
     -- ========== 状态管理 ==========
     -- 图片状态
     -- 'wait' = 待评分（位于 judge_wait 目录）
-    -- 'done' = 已评分（位于 judge_done 目录）
+    -- 'done' = 已评分（仍位于 judge_wait 目录，通过 status 字段区分）
     -- 'deleted' = 已删除（图片文件已清理，但保留评分记录）
     status TEXT DEFAULT 'wait' CHECK(status IN ('wait', 'done', 'deleted')),
 
@@ -85,6 +86,24 @@ CREATE INDEX idx_judged_at ON images(judged_at);
 
 -- 组合索引：按拉取时间和页码排序（用于获取待评分图片）
 CREATE INDEX idx_fetched_page ON images(fetched_at, page_index);
+
+-- ============================================
+-- 异步任务表: bookmark_jobs
+-- ============================================
+-- 存储待执行的 Pixiv 收藏任务（按作品维度去重）
+
+CREATE TABLE bookmark_jobs (
+    pid INTEGER PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'done')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    next_retry_at TEXT NOT NULL,
+    last_error TEXT
+);
+
+CREATE INDEX idx_bookmark_jobs_pending
+ON bookmark_jobs(status, next_retry_at, created_at);
 
 -- ============================================
 -- 统计视图

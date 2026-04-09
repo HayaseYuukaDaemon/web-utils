@@ -6,7 +6,7 @@ Pixiv 图片评分系统 - 数据库操作模块
 """
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from contextlib import contextmanager
@@ -25,6 +25,8 @@ class DatasetDB:
         """
         self.db_path = Path(db_path)
         self.schema_path = Path(schema_path)
+        if self.db_path.exists():
+            self.ensure_runtime_schema()
 
     @contextmanager
     def get_connection(self):
@@ -60,7 +62,31 @@ class DatasetDB:
         with self.get_connection() as conn:
             conn.executescript(schema_sql)
 
+        self.ensure_runtime_schema()
         print("数据库初始化完成")
+
+    def ensure_runtime_schema(self) -> None:
+        """为已有数据库补齐运行时需要的增量表结构。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bookmark_jobs (
+                    pid INTEGER PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'done')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    next_retry_at TEXT NOT NULL,
+                    last_error TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bookmark_jobs_pending
+                ON bookmark_jobs(status, next_retry_at, created_at)
+                """
+            )
 
     def add_image(self, pid: int, page_index: int, local_filename: str,
                   fetched_at: Optional[str] = None) -> bool:
@@ -429,6 +455,115 @@ class DatasetDB:
         except Exception as e:
             print(f"获取待清理图片失败: {e}")
             return []
+
+    def enqueue_bookmark_job(self, pid: int) -> bool:
+        """
+        为作品加入收藏任务队列。
+
+        已完成的任务不会重复入队；未完成任务会被刷新为 pending。
+        """
+        now = datetime.now().isoformat()
+
+        try:
+            with self.get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO bookmark_jobs (
+                        pid, status, attempts, created_at, updated_at, next_retry_at, last_error
+                    )
+                    VALUES (?, 'pending', 0, ?, ?, ?, NULL)
+                    ON CONFLICT(pid) DO UPDATE SET
+                        status = CASE
+                            WHEN bookmark_jobs.status = 'done' THEN 'done'
+                            ELSE 'pending'
+                        END,
+                        attempts = CASE
+                            WHEN bookmark_jobs.status = 'done' THEN bookmark_jobs.attempts
+                            ELSE 0
+                        END,
+                        updated_at = excluded.updated_at,
+                        next_retry_at = CASE
+                            WHEN bookmark_jobs.status = 'done' THEN bookmark_jobs.next_retry_at
+                            ELSE excluded.next_retry_at
+                        END,
+                        last_error = CASE
+                            WHEN bookmark_jobs.status = 'done' THEN bookmark_jobs.last_error
+                            ELSE NULL
+                        END
+                    """,
+                    (pid, now, now, now)
+                )
+            print(f"加入收藏队列成功: pid={pid}")
+            return True
+        except Exception as e:
+            print(f"加入收藏队列失败: {e}")
+            return False
+
+    def get_pending_bookmark_jobs(self, limit: int = 20) -> list[dict]:
+        """获取当前可执行的收藏任务。"""
+        now = datetime.now().isoformat()
+
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT *
+                    FROM bookmark_jobs
+                    WHERE status = 'pending' AND next_retry_at <= ?
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                    """,
+                    (now, limit)
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"获取待执行收藏任务失败: {e}")
+            return []
+
+    def mark_bookmark_job_done(self, pid: int) -> bool:
+        """将收藏任务标记为已完成。"""
+        now = datetime.now().isoformat()
+
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE bookmark_jobs
+                    SET status = 'done',
+                        updated_at = ?,
+                        next_retry_at = ?,
+                        last_error = NULL
+                    WHERE pid = ?
+                    """,
+                    (now, now, pid)
+                )
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"标记收藏任务完成失败: {e}")
+            return False
+
+    def mark_bookmark_job_retry(self, pid: int, delay_seconds: int, error_message: str) -> bool:
+        """记录收藏任务失败，并设置下次重试时间。"""
+        now = datetime.now()
+        next_retry_at = (now + timedelta(seconds=delay_seconds)).isoformat()
+
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE bookmark_jobs
+                    SET attempts = attempts + 1,
+                        updated_at = ?,
+                        next_retry_at = ?,
+                        last_error = ?
+                    WHERE pid = ?
+                    """,
+                    (now.isoformat(), next_retry_at, error_message, pid)
+                )
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"记录收藏任务重试失败: {e}")
+            return False
 
 
 # 评分枚举

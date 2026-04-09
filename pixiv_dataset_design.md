@@ -23,7 +23,7 @@
 | 1 | 中性 | NEUTRAL |
 | 0 | 讨厌 | HATE |
 
-> **自动收藏**：评分 >= 2（LIKE 或 LOVE）时，系统会自动将对应 Pixiv 作品添加到收藏夹。
+> **自动收藏**：评分 >= 2（LIKE 或 LOVE）时会把作品加入异步收藏队列，由后台任务批量执行 Pixiv 收藏请求。
 
 ---
 
@@ -86,7 +86,7 @@
    - 设置 `score` 字段（0-3）
    - 设置 `judged_at` 时间戳
    - 更新 `status` 为 `done`
-6. 如果 `score >= 2`，自动将作品添加到 Pixiv 收藏夹
+6. 如果 `score >= 2`，将作品加入异步收藏队列，由后台任务批量添加到 Pixiv 收藏夹
 7. **后台执行维护任务**：
    - 确保待评分图片充足（触发条件：`wait_count < min_wait`）
    - 清理已评分图片（触发条件：`done_count > max_done`）
@@ -213,8 +213,16 @@ CREATE INDEX idx_fetched_page ON images(fetched_at, page_index);
 - 渲染 HTML 页面，展示图片和四个评分按钮
 - 显示当前统计信息
 
+**前端功能**：
+- 四个评分按钮（讨厌/中性/有点感觉/非常喜欢）
+- 上一张、刷新、跳过按钮
+- 键盘快捷键（1-4 评分，← → 切换图片，空格跳过）
+- 评分成功后自动加载下一张待评分图片
+
 **返回**：
 - HTML 页面（`templates/dataset.html`）
+
+> 注意：评分界面没有手动触发维护的按钮。如需手动触发维护，请调用 `POST /dataset/maintenance` API。
 
 ---
 
@@ -307,7 +315,7 @@ else:
    SET score = ?, judged_at = ?, status = 'done'
    WHERE pid = ? AND page_index = ?;
    ```
-3. **自动收藏**：如果 `score >= 2`，调用 Pixiv API 将作品加入收藏夹
+3. **自动收藏**：在 `score >= 2` 时先写入异步收藏队列，再由后台批量调用 Pixiv API 将作品加入收藏夹
 4. **后台执行维护任务**（不阻塞响应）：
    - 查询待评分图片数量，不足时拉取新作品
    - 查询已评分图片数量，超量时清理旧图片
@@ -349,10 +357,11 @@ else:
 {
   "success": false,
   "message": "维护任务正在运行中",
-  "status": "running",
-  "last_result": { ... }
+  "status": "running"
 }
 ```
+
+> 注意：当前实现返回的 JSON 不包含 `last_result` 字段。如需查看上次维护结果，可通过 `/dataset/stats` 端点获取当前统计信息。
 
 ---
 
@@ -380,7 +389,7 @@ my_utils/
 ├── better_pixiv.py             # Pixiv API 封装（基于 pixivpy-async）
 ├── dataset_api.py              # Dataset 路由和 API 端点
 ├── dataset_db.py               # SQLite 数据库 CRUD 操作
-├── pixiv_fetcher.py            # Pixiv 作品拉取和自动维护逻辑
+├── pixiv_dataset_service.py    # PixivDatasetService：数据集抓取和自动维护逻辑
 ├── dataset_schema.sql          # 数据库 Schema
 ├── site_utils.py               # 认证中间件和权限控制
 ├── setup_logger.py             # 日志配置
@@ -476,11 +485,13 @@ background_tasks.add_task(run_maintenance_task_bg)
 
 ### 2. 自动收藏
 
-评分 >= 2（LIKE 或 LOVE）时，自动调用 Pixiv API 收藏作品：
+评分 >= 2（LIKE 或 LOVE）时，先把作品加入异步收藏队列：
 ```python
-if request.score > 1 and fetcher:
-    await fetcher.pixiv.bookmark_illust(request.pid)
+if request.score > 1 and dataset_service:
+    dataset_service.enqueue_bookmark_job(request.pid)
 ```
+
+后台维护任务会批量消费这些 job，并在单个 Pixiv 会话内执行多个 `bookmark_illust(pid)`，避免每次评分都单独登录一次 Pixiv。
 
 ### 3. 统一存储策略
 

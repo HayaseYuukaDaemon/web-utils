@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse, FileResponse
 from pydantic import BaseModel
 
 from dataset_db import DatasetDB
-from pixiv_fetcher import PixivFetcher
+from pixiv_dataset_service import PixivDatasetService
 from setup_logger import get_logger
 from site_utils import Authoricator, UserAbilities
 
@@ -24,13 +24,13 @@ logger = get_logger('DatasetAPI')
 # 全局实例
 db = DatasetDB()
 
-# 初始化 fetcher
+# 初始化数据集服务
 try:
-    fetcher = PixivFetcher.from_config()
-    logger.info(f"PixivFetcher 初始化成功 (mock_mode={fetcher.mock_mode})")
+    dataset_service = PixivDatasetService.from_config()
+    logger.info(f"PixivDatasetService 初始化成功 (mock_mode={dataset_service.mock_mode})")
 except Exception as e:
-    logger.error(f"无法初始化 PixivFetcher: {e}", exc_info=True)
-    fetcher = None
+    logger.error(f"无法初始化 PixivDatasetService: {e}", exc_info=True)
+    dataset_service = None
 
 # 维护任务锁（防止并发执行）
 maintenance_lock = asyncio.Lock()
@@ -85,8 +85,8 @@ async def get_image_by_offset(offset: int):
         raise HTTPException(status_code=404, detail="图片不存在")
 
     # 生成 R2 URL
-    if fetcher and fetcher.r2_base_url:
-        r2_url = fetcher.get_r2_url(image['local_filename'], image['status'])
+    if dataset_service and dataset_service.r2_base_url:
+        r2_url = dataset_service.get_r2_url(image['local_filename'], image['status'])
         if r2_url:
             return RedirectResponse(url=r2_url, status_code=302)
 
@@ -112,8 +112,8 @@ async def get_image_info_by_offset(offset: int):
 
     # 生成 R2 URL
     image_url = None
-    if fetcher and fetcher.r2_base_url:
-        image_url = fetcher.get_r2_url(image['local_filename'], image['status'])
+    if dataset_service and dataset_service.r2_base_url:
+        image_url = dataset_service.get_r2_url(image['local_filename'], image['status'])
 
     return ImageResponse(
         pid=image['pid'],
@@ -145,8 +145,8 @@ async def get_image(pid: int, page_index: int):
         raise HTTPException(status_code=404, detail="图片不存在")
 
     # 生成 R2 URL
-    if fetcher and fetcher.r2_base_url:
-        r2_url = fetcher.get_r2_url(image['local_filename'], image['status'])
+    if dataset_service and dataset_service.r2_base_url:
+        r2_url = dataset_service.get_r2_url(image['local_filename'], image['status'])
         if r2_url:
             return RedirectResponse(url=r2_url, status_code=302)
 
@@ -169,11 +169,11 @@ async def run_maintenance_task():
         logger.info("[维护任务] 开始执行后台维护任务")
 
         try:
-            if fetcher:
-                result = await fetcher.auto_maintenance()
+            if dataset_service:
+                result = await dataset_service.auto_maintenance()
                 logger.info(f"[维护任务] 维护完成: {result}")
             else:
-                logger.warning("[维护任务] Fetcher 未初始化，跳过维护")
+                logger.warning("[维护任务] DatasetService 未初始化，跳过维护")
         except Exception as e:
             logger.error(f"[维护任务] 维护失败: {e}", exc_info=True)
         finally:
@@ -206,17 +206,12 @@ async def judge_image(request: JudgeRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(run_maintenance_task)
     logger.info(f"[Judge] 评分成功: pid={request.pid}, page={request.page_index}, score={request.score}")
 
-    # 评分 >= 2 时自动收藏
-    bookmark_error = None
-    if request.score > 1 and fetcher:
-        try:
-            await fetcher.pixiv.bookmark_illust(request.pid)
-        except Exception as e:
-            bookmark_error = e
-        if bookmark_error:
-            logger.warning('添加收藏失败', exc_info=bookmark_error)
+    if request.score > 1 and dataset_service:
+        queued = dataset_service.enqueue_bookmark_job(request.pid)
+        if queued:
+            logger.info(f'[Judge] score >= 2，已加入收藏队列: pid={request.pid}')
         else:
-            logger.info('已添加收藏')
+            logger.warning(f'[Judge] score >= 2，但加入收藏队列失败: pid={request.pid}')
 
     # 获取下一张待评分图片
     next_image = db.get_image_by_offset(0)

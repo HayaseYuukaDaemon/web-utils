@@ -1,7 +1,7 @@
 """
-Pixiv 作品拉取模块
+Pixiv 数据集服务模块
 
-从 Pixiv 获取推荐作品并下载到本地，添加到数据库
+负责从 Pixiv 获取推荐作品、下载到本地并维护数据集状态。
 """
 
 import asyncio
@@ -15,8 +15,8 @@ from dataset_db import DatasetDB
 from setup_logger import get_logger
 
 
-class PixivFetcher:
-    """Pixiv 作品拉取器"""
+class PixivDatasetService:
+    """Pixiv 数据集服务，负责抓取、落盘、入库和维护。"""
 
     def __init__(self,
                  refresh_token: str,
@@ -39,7 +39,7 @@ class PixivFetcher:
             r2_path_prefix: 图片在 R2 中的路径前缀
             mock_mode: 是否为 mock 模式（本地开发）
         """
-        self.logger = get_logger('PixivFetcher')
+        self.logger = get_logger('PixivDatasetService')
         self.refresh_token = refresh_token
         self.proxy = proxy
         self.storage_path = Path(storage_path).expanduser()
@@ -47,20 +47,25 @@ class PixivFetcher:
         self.r2_base_url = r2_base_url
         self.r2_path_prefix = r2_path_prefix
         self.mock_mode = mock_mode
-        self.counts_config = counts_config
+        self.counts_config = counts_config or {}
 
         # 确保存储目录存在
         if not self.storage_path.exists():
             self.storage_path.mkdir(parents=True)
             self.logger.info(f'创建存储目录: {self.storage_path}')
 
-        # 初始化 BetterPixiv
-        self.pixiv = BetterPixiv(
+    def create_pixiv_client(self) -> BetterPixiv:
+        """创建一个新的 BetterPixiv 上下文实例。"""
+        return BetterPixiv(
             proxy=self.proxy,
             refresh_token=self.refresh_token,
-            storge_path=self.storage_path,
+            storage_path=self.storage_path,
             logger=self.logger
         )
+
+    def enqueue_bookmark_job(self, pid: int) -> bool:
+        """把作品加入异步收藏队列。"""
+        return self.db.enqueue_bookmark_job(pid)
 
     @classmethod
     def from_config(cls, config_path: str = "pixiv_config.yaml"):
@@ -71,7 +76,7 @@ class PixivFetcher:
             config_path: 配置文件路径
 
         Returns:
-            PixivFetcher 实例
+            PixivDatasetService 实例
         """
         config_file = Path(config_path)
         if not config_file.exists():
@@ -131,23 +136,17 @@ class PixivFetcher:
         url = f"{self.r2_base_url.rstrip('/')}/{self.r2_path_prefix}/judge_wait/{filename}"
         return url
 
-    async def fetch_recommended_works(self, count: int) -> list[WorkDetail]:
-        """
-        拉取推荐作品
-
-        Args:
-            count: 需要拉取的作品数量
-
-        Returns:
-            作品详情列表
-        """
-        self.logger.info(f'[拉取] 开始拉取推荐作品，目标数量: {count}')
-        self.logger.debug(f'[拉取] 当前配置 - proxy: {self.proxy}, mock_mode: {self.mock_mode}')
+    async def _fetch_recommended_works_with_client(
+            self,
+            pixiv: BetterPixiv,
+            count: int,
+    ) -> list[WorkDetail]:
+        """在已建立的 Pixiv 会话内拉取推荐作品。"""
         works = []
 
         while len(works) < count:
             self.logger.debug(f'[拉取] 当前已拉取 {len(works)} 份，继续拉取...')
-            batch = await self.pixiv.get_recommended_illusts()
+            batch = await pixiv.get_recommended_illusts()
 
             if not batch:
                 self.logger.warning('[拉取] 没有更多推荐作品')
@@ -163,10 +162,28 @@ class PixivFetcher:
             # 避免请求过快
             await asyncio.sleep(1)
 
+        return works
+
+    async def fetch_recommended_works(self, count: int) -> list[WorkDetail]:
+        """
+        拉取推荐作品
+
+        Args:
+            count: 需要拉取的作品数量
+
+        Returns:
+            作品详情列表
+        """
+        self.logger.info(f'[拉取] 开始拉取推荐作品，目标数量: {count}')
+        self.logger.debug(f'[拉取] 当前配置 - proxy: {self.proxy}, mock_mode: {self.mock_mode}')
+
+        async with self.create_pixiv_client() as pixiv:
+            works = await self._fetch_recommended_works_with_client(pixiv, count)
+
         self.logger.info(f'[拉取] 拉取完成，共 {len(works)} 份作品')
         return works
 
-    async def download_and_save_work(self, work: WorkDetail) -> int:
+    async def _download_and_save_work(self, work: WorkDetail, pixiv: BetterPixiv) -> int:
         """
         下载作品的所有图片并保存到数据库
 
@@ -181,7 +198,7 @@ class PixivFetcher:
 
         # 下载作品
         self.logger.debug(f'[下载] 调用 pixiv.download() 下载作品...')
-        download_result = await self.pixiv.download([work], max_workers=3)
+        download_result = await pixiv.download([work], max_workers=3)
 
         self.logger.debug(f'[下载] 下载结果: success_units={len(download_result.success_units)}, failed_units={len(download_result.failed_units)}')
 
@@ -262,12 +279,13 @@ class PixivFetcher:
         success_images = 0
         success_works = 0
 
-        for work in works:
-            total_images += work.page_count
-            count = await self.download_and_save_work(work)
-            success_images += count
-            if count > 0:
-                success_works += 1
+        async with self.create_pixiv_client() as pixiv:
+            for work in works:
+                total_images += work.page_count
+                count = await self._download_and_save_work(work, pixiv)
+                success_images += count
+                if count > 0:
+                    success_works += 1
 
         stats = {
             'total_works': len(works),
@@ -278,6 +296,54 @@ class PixivFetcher:
 
         self.logger.info(f'拉取完成: {stats}')
         return stats
+
+    async def bookmark_illust(self, illust_id: int) -> None:
+        """为单次收藏请求创建独立 Pixiv 会话。"""
+        async with self.create_pixiv_client() as pixiv:
+            await pixiv.bookmark_illust(illust_id)
+
+    def get_bookmark_retry_delay_seconds(self, attempts: int) -> int:
+        """根据失败次数计算下一次收藏任务的退避时间。"""
+        return min(60 * (2 ** attempts), 6 * 60 * 60)
+
+    async def process_bookmark_jobs(self, batch_size: int | None = None) -> dict:
+        """
+        批量处理收藏任务，在单个 Pixiv 会话内执行多个 bookmark 请求。
+        """
+        if batch_size is None:
+            batch_size = self.counts_config.get('bookmark_batch_size', 10) if self.counts_config else 10
+
+        jobs = self.db.get_pending_bookmark_jobs(batch_size)
+        result = {
+            'queued_jobs': len(jobs),
+            'bookmarked_works': 0,
+            'failed_jobs': 0,
+        }
+        if not jobs:
+            self.logger.info('[收藏任务] 当前没有待执行收藏任务')
+            return result
+
+        self.logger.info(f'[收藏任务] 开始处理 {len(jobs)} 个收藏任务')
+
+        async with self.create_pixiv_client() as pixiv:
+            for job in jobs:
+                pid = job['pid']
+                try:
+                    await pixiv.bookmark_illust(pid)
+                    self.db.mark_bookmark_job_done(pid)
+                    result['bookmarked_works'] += 1
+                    self.logger.info(f'[收藏任务] 收藏成功: pid={pid}')
+                except Exception as e:
+                    delay_seconds = self.get_bookmark_retry_delay_seconds(job['attempts'])
+                    self.db.mark_bookmark_job_retry(pid, delay_seconds, str(e))
+                    result['failed_jobs'] += 1
+                    self.logger.warning(
+                        f'[收藏任务] 收藏失败: pid={pid}, '
+                        f'下次重试 {delay_seconds}s 后, error={e}'
+                    )
+
+        self.logger.info(f'[收藏任务] 执行完成: {result}')
+        return result
 
     def get_wait_count(self) -> int:
         """
@@ -355,8 +421,15 @@ class PixivFetcher:
         result = {
             'fetched_works': 0,
             'fetched_images': 0,
-            'deleted_images': 0
+            'deleted_images': 0,
+            'bookmark_jobs': {
+                'queued_jobs': 0,
+                'bookmarked_works': 0,
+                'failed_jobs': 0,
+            }
         }
+
+        result['bookmark_jobs'] = await self.process_bookmark_jobs()
 
         # 根据 mock_mode 决定拉取数量
         fetch_count = 10 if self.mock_mode else self.counts_config.get('fetch_count', 50)
