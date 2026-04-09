@@ -1,1 +1,39 @@
 auth.json
+
+# Local IDE / agent state
+.idea/
+.claude/
+
+# Python caches / environments
+__pycache__/
+*.py[cod]
+.mypy_cache/
+venv/
+
+# Runtime data / logs
+logs/
+mock_r2/
+dataset.db
+dataset.db.bak_*
+dataset.db.bkp
+
+# Local config / secrets
+custom_config.yaml
+pixiv_config.yaml
+config.yaml
+vault_configs/
+proxy_url
+*_proxy_url
+cf_proxy.bash
+
+# Local scratch / generated files
+mypy.ini
+test.py
+rec.json
+CNA.yaml
+proceed_CNA.yaml
+=
+
+# Local static scratch files
+static/holiday.html
+static/test
