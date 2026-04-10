@@ -285,10 +285,12 @@
     <script>
         let currentOffset = 0;
         let currentImage = null;
-        let prefetchedNextWaitImage = null;
+        let prefetchedWaitImages = [];
         const imageInfoCache = new Map();
         const imagePreloadCache = new Map();
         let activeLoadToken = 0;
+        let prefetchGeneration = 0;
+        const WAIT_PREFETCH_COUNT = 5;
 
         function getErrorPlaceholderSvg() {
             return "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22><text x=%2250%%22 y=%2250%%22 text-anchor=%22middle%22>图片加载失败</text></svg>";
@@ -346,28 +348,68 @@
             return promise;
         }
 
-        async function prefetchOffset(offset, { markAsNextWait = false } = {}) {
-            try {
-                const image = await fetchImageInfo(offset);
-                if (!image?.image_url) {
+        async function prefetchWaitQueue(baseOffset, generation) {
+            if (baseOffset < 0) {
+                return;
+            }
+
+            const offsets = Array.from(
+                { length: WAIT_PREFETCH_COUNT },
+                (_, index) => baseOffset + index + 1
+            );
+
+            const results = await Promise.all(offsets.map(async (offset) => {
+                try {
+                    const image = await fetchImageInfo(offset);
+                    if (!image?.image_url) {
+                        return null;
+                    }
+                    await preloadImageUrl(image.image_url);
+                    return image;
+                } catch (error) {
                     return null;
                 }
-                await preloadImageUrl(image.image_url);
-                if (markAsNextWait) {
-                    prefetchedNextWaitImage = image;
-                }
-                return image;
-            } catch (error) {
-                if (markAsNextWait) {
-                    prefetchedNextWaitImage = null;
-                }
-                return null;
+            }));
+
+            if (generation !== prefetchGeneration) {
+                return;
             }
+
+            prefetchedWaitImages = results.filter((image) => image !== null);
+        }
+
+        function scheduleWaitPrefetch(baseOffset) {
+            if (baseOffset < 0) {
+                prefetchGeneration += 1;
+                prefetchedWaitImages = [];
+                return;
+            }
+
+            const generation = ++prefetchGeneration;
+            prefetchedWaitImages = [];
+            prefetchWaitQueue(baseOffset, generation);
         }
 
         function clearImageCaches() {
             imageInfoCache.clear();
-            prefetchedNextWaitImage = null;
+            prefetchedWaitImages = [];
+            prefetchGeneration += 1;
+        }
+
+        function displayImage(image, offset) {
+            currentOffset = offset;
+            currentImage = image;
+            renderImage(image);
+            scheduleWaitPrefetch(offset);
+        }
+
+        async function loadNextWaitImageAfterJudge() {
+            if (prefetchedWaitImages.length > 0) {
+                const [nextImage] = prefetchedWaitImages;
+                displayImage(nextImage, 0);
+                return;
+            }
+            await loadImage(0);
         }
 
         // 加载统计信息
@@ -409,11 +451,7 @@
                     return;
                 }
 
-                currentOffset = offset;
-                currentImage = image;
-                renderImage(image);
-
-                prefetchOffset(offset + 1, { markAsNextWait: offset === 0 });
+                displayImage(image, offset);
             } catch (error) {
                 container.innerHTML = `<div class="loading">❌ ${error.message}</div>`;
                 showToast('加载失败: ' + error.message, 'error');
@@ -450,12 +488,14 @@
                     // 刷新统计（后台维护任务会自动更新数据）
                     await loadStats();
 
-                    const nextImageAfterJudge = currentOffset === 0 ? prefetchedNextWaitImage : null;
+                    const nextPrefetchedWaitImages = currentOffset === 0
+                        ? [...prefetchedWaitImages]
+                        : [];
                     clearImageCaches();
-                    prefetchedNextWaitImage = nextImageAfterJudge;
+                    prefetchedWaitImages = nextPrefetchedWaitImages;
 
                     // 加载下一张
-                    await loadImage(0);
+                    await loadNextWaitImageAfterJudge();
                 } else {
                     showToast('❌ 评分失败', 'error');
                 }
