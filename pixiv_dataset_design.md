@@ -165,7 +165,7 @@ CREATE TABLE images (
 
     -- 图片来源
     local_filename TEXT,     -- 由原图 URL basename 派生的文件名
-    source_image_url TEXT,   -- Pixiv 原图 URL
+    source_image_url TEXT NOT NULL,   -- Pixiv 原图 URL
 
     -- 唯一约束
     UNIQUE(pid, page_index)  -- 同一作品的同一页只能有一条记录
@@ -485,7 +485,7 @@ if request.score > 1 and dataset_service:
 https://document-worker.hayaseyuuka.date/?urlToProxy={图片链接}&refererURL=https://www.pixiv.net/
 ```
 
-旧数据若缺少 `source_image_url`，在首次访问时会懒回填。
+`source_image_url` 现在被视为必备字段，迁移完成后运行时不再做懒回填兼容。
 
 ### 4. 认证机制
 

@@ -97,41 +97,6 @@ class PixivDatasetService:
             f"&refererURL={encoded_referer}"
         )
 
-    def get_work_image_source_url(self, work: WorkDetail, page_index: int) -> str | None:
-        """从作品详情中取指定页的原图 URL。"""
-        image_records = self._extract_work_image_records(work)
-        for record_page_index, _filename, source_image_url in image_records:
-            if record_page_index == page_index:
-                return source_image_url
-        return None
-
-    async def ensure_source_image_url(self, pid: int, page_index: int) -> str | None:
-        """
-        确保数据库里存在源图片 URL。
-
-        对旧数据做懒回填：首次访问时再调用 Pixiv API 补齐 source_image_url。
-        """
-        image = self.db.get_image_by_pid_page(pid, page_index)
-        if not image:
-            return None
-        if image.get("source_image_url"):
-            return image["source_image_url"]
-
-        self.logger.info(f'[图片链接] 检测到旧记录缺少 source_image_url，开始回填: pid={pid}, page={page_index}')
-        async with self.create_pixiv_client() as pixiv:
-            work = await pixiv.get_work_details(pid)
-        if work is None:
-            self.logger.warning(f'[图片链接] 回填失败，作品不存在: pid={pid}')
-            return None
-
-        source_image_url = self.get_work_image_source_url(work, page_index)
-        if not source_image_url:
-            self.logger.warning(f'[图片链接] 回填失败，作品中不存在对应页: pid={pid}, page={page_index}')
-            return None
-
-        self.db.update_image_source_url(pid, page_index, source_image_url)
-        return source_image_url
-
     async def _fetch_recommended_works_with_client(
             self,
             pixiv: BetterPixiv,

@@ -61,7 +61,7 @@ CREATE TABLE images (
     local_filename TEXT,
 
     -- Pixiv 原图 URL，用于请求时经 document-worker 反代访问
-    source_image_url TEXT,
+    source_image_url TEXT NOT NULL,
 
     -- ========== 唯一约束 ==========
     -- 同一作品的同一页只能有一条记录

@@ -85,13 +85,11 @@ async def get_image_by_offset(offset: int):
         raise HTTPException(status_code=404, detail="图片不存在")
 
     source_image_url = image.get('source_image_url')
-    if dataset_service and not source_image_url:
-        source_image_url = await dataset_service.ensure_source_image_url(image['pid'], image['page_index'])
     image_url = dataset_service.get_proxied_image_url(source_image_url) if dataset_service else None
     if image_url:
         return RedirectResponse(url=image_url, status_code=302)
 
-    raise HTTPException(status_code=500, detail="图片代理 URL 未配置")
+    raise HTTPException(status_code=500, detail="图片原始 URL 缺失")
 
 
 @dataset_router.get('/image/info/offset/{offset}',
@@ -112,8 +110,6 @@ async def get_image_info_by_offset(offset: int):
         raise HTTPException(status_code=404, detail="图片不存在")
 
     source_image_url = image.get('source_image_url')
-    if dataset_service and not source_image_url:
-        source_image_url = await dataset_service.ensure_source_image_url(image['pid'], image['page_index'])
     image_url = dataset_service.get_proxied_image_url(source_image_url) if dataset_service else None
 
     return ImageResponse(
@@ -146,13 +142,11 @@ async def get_image(pid: int, page_index: int):
         raise HTTPException(status_code=404, detail="图片不存在")
 
     source_image_url = image.get('source_image_url')
-    if dataset_service and not source_image_url:
-        source_image_url = await dataset_service.ensure_source_image_url(image['pid'], image['page_index'])
     image_url = dataset_service.get_proxied_image_url(source_image_url) if dataset_service else None
     if image_url:
         return RedirectResponse(url=image_url, status_code=302)
 
-    raise HTTPException(status_code=500, detail="图片代理 URL 未配置")
+    raise HTTPException(status_code=500, detail="图片原始 URL 缺失")
 
 
 # 后台维护任务

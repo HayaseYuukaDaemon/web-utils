@@ -96,7 +96,7 @@ class DatasetDB:
             )
 
     def add_image(self, pid: int, page_index: int, local_filename: str,
-                  source_image_url: str | None = None,
+                  source_image_url: str,
                   fetched_at: Optional[str] = None) -> bool:
         """
         添加单张图片
@@ -113,6 +113,9 @@ class DatasetDB:
         """
         if fetched_at is None:
             fetched_at = datetime.now().isoformat()
+        if not source_image_url:
+            print(f"添加图片失败: pid={pid}, page={page_index} 缺少 source_image_url")
+            return False
 
         try:
             with self.get_connection() as conn:
@@ -136,7 +139,7 @@ class DatasetDB:
             self,
             pid: int,
             filenames: list[str],
-            source_image_urls: list[str] | None = None,
+            source_image_urls: list[str],
             fetched_at: Optional[str] = None
     ) -> int:
         """
@@ -153,12 +156,13 @@ class DatasetDB:
         """
         if fetched_at is None:
             fetched_at = datetime.now().isoformat()
+        if len(filenames) != len(source_image_urls):
+            print(f"批量添加失败: pid={pid}, 文件名数量与原图 URL 数量不一致")
+            return 0
 
         success_count = 0
         for page_index, filename in enumerate(filenames):
-            source_image_url = None
-            if source_image_urls and page_index < len(source_image_urls):
-                source_image_url = source_image_urls[page_index]
+            source_image_url = source_image_urls[page_index]
             if self.add_image(pid, page_index, filename, source_image_url, fetched_at):
                 success_count += 1
 
@@ -275,23 +279,6 @@ class DatasetDB:
             return True
         except Exception as e:
             print(f"修改状态失败: {e}")
-            return False
-
-    def update_image_source_url(self, pid: int, page_index: int, source_image_url: str) -> bool:
-        """更新图片原始 URL。"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.execute(
-                    """
-                    UPDATE images
-                    SET source_image_url = ?
-                    WHERE pid = ? AND page_index = ?
-                    """,
-                    (source_image_url, pid, page_index)
-                )
-                return cursor.rowcount > 0
-        except Exception as e:
-            print(f"更新图片原始 URL 失败: {e}")
             return False
 
     def get_image_by_offset(self, offset: int) -> Optional[dict]:
