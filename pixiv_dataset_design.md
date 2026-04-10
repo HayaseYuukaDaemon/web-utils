@@ -23,7 +23,7 @@
 | 1 | 中性 | NEUTRAL |
 | 0 | 讨厌 | HATE |
 
-> **自动收藏**：评分 >= 2（LIKE 或 LOVE）时会把作品加入异步收藏队列，由后台任务批量执行 Pixiv 收藏请求。
+> **自动收藏**：评分 >= 2（LIKE 或 LOVE）时会把作品加入异步收藏队列；收藏任务会在“待评分不足、触发补图批次”时集中执行，也会在应用优雅退出时尽量冲刷。
 
 ---
 
@@ -43,6 +43,7 @@
 │                                       ▼                  │
 │                              ┌──────────────────────┐   │
 │                              │ 执行维护任务           │   │
+│                              │ - 低水位时处理收藏队列 │   │
 │                              │ - 检查并拉取新作品    │   │
 │                              │ - 清理旧已评分图片    │   │
 │                              └──────────────────────┘   │
@@ -87,9 +88,9 @@
    - 设置 `score` 字段（0-3）
    - 设置 `judged_at` 时间戳
    - 更新 `status` 为 `done`
-6. 如果 `score >= 2`，将作品加入异步收藏队列，由后台任务批量添加到 Pixiv 收藏夹
+6. 如果 `score >= 2`，将作品加入异步收藏队列
 7. **后台执行维护任务**：
-   - 确保待评分图片充足（触发条件：`wait_count < min_wait`）
+   - 若待评分图片不足，则在同一个 Pixiv 会话内先批量处理 bookmark 队列，再拉取新作品
    - 清理已评分图片（触发条件：`done_count > max_done`）
 
 ### 3. 存储管理
@@ -106,7 +107,7 @@
 
 ### 4. 评分后的自动维护
 
-每次评分后同步执行以下维护任务：
+每次评分后后台触发以下维护任务：
 
 **4.1 确保待评分图片充足**
 ```python
@@ -115,8 +116,9 @@ min_wait = counts_config.get('min_wait', 20)  # Mock: 20, 生产: 20
 
 if wait_count < min_wait:
     fetch_count = 10 if mock_mode else counts_config.get('fetch_count', 50)
-    # Mock 模式拉取 10 份作品，生产模式拉取 fetch_count 份
-    fetch_and_store(fetch_count)
+    async with create_pixiv_client() as pixiv:
+        process_bookmark_jobs_with_client(pixiv)
+        fetch_and_store_with_client(pixiv, fetch_count)
 ```
 
 **4.2 清理已评分图片（LRU 策略）**
@@ -219,6 +221,7 @@ CREATE INDEX idx_fetched_page ON images(fetched_at, page_index);
 - 上一张、刷新、跳过按钮
 - 键盘快捷键（1-4 评分，← → 切换图片，空格跳过）
 - 评分成功后自动加载下一张待评分图片
+- 前端会预取后续 5 张待评分图片，并在浏览器中预载图片资源
 
 **返回**：
 - HTML 页面（`templates/dataset.html`）
@@ -437,6 +440,8 @@ counts_config:
   max_done: 100     # 已评分图片上限，超出时触发清理
   keep_count: 50    # 清理时保留的最近已评分图片数量
   fetch_count: 50   # 生产模式每次拉取的作品数量（Mock 模式固定为 10）
+  bookmark_batch_size: 10           # 补图批次里单次最多处理多少个 bookmark job
+  bookmark_shutdown_batch_size: 50  # 应用退出前冲刷 bookmark 队列时的批大小
 ```
 
 ### 各参数含义
@@ -447,6 +452,8 @@ counts_config:
 | `max_done` | 100 | 已评分图片数量高于此值时，自动清理旧图片 |
 | `keep_count` | 50 | 清理时保留的最近已评分图片数量 |
 | `fetch_count` | 50 | 生产模式每次拉取的作品数量（Mock 模式固定为 10） |
+| `bookmark_batch_size` | 10 | 补图批次里单次处理的 bookmark job 上限 |
+| `bookmark_shutdown_batch_size` | 50 | 应用退出前冲刷 bookmark 队列时的批大小 |
 
 ---
 
@@ -462,7 +469,7 @@ background_tasks.add_task(run_maintenance_task)
 
 **手动触发后台执行**（`/dataset/maintenance` 端点）：
 ```python
-background_tasks.add_task(run_maintenance_task_bg)
+background_tasks.add_task(run_maintenance_task)
 ```
 
 使用 `asyncio.Lock` 防止并发执行重复拉取。
@@ -475,7 +482,9 @@ if request.score > 1 and dataset_service:
     dataset_service.enqueue_bookmark_job(request.pid)
 ```
 
-后台维护任务会批量消费这些 job，并在单个 Pixiv 会话内执行多个 `bookmark_illust(pid)`，避免每次评分都单独登录一次 Pixiv。
+当 `wait_count < min_wait`、系统进入补图批次时，后台维护任务会先批量消费这些 job，再在同一个 Pixiv 会话内拉取推荐作品，避免每次评分都单独登录一次 Pixiv。
+
+另外，应用优雅退出时也会尽量冲刷当前可执行的 bookmark 队列。
 
 ### 3. 图片访问策略
 

@@ -10,30 +10,29 @@ refresh_token: "your_refresh_token_here"
 proxy: null
 
 # Mock 模式（开发用）
-# true: 使用本地目录模拟 R2，适合 Windows 本地开发
-# false: 使用真实的 R2 挂载目录
+# true: 本地开发，维护任务默认每次只拉取 10 份作品
+# false: 生产环境
 mock_mode: true
-
-# 图片存储目录
-# mock_mode=true 时使用本地目录
-# mock_mode=false 时使用 R2 挂载目录
-storage_path:
-  mock: "./mock_r2/pixiv_dataset"
-  production: "~/cf_r2/cf-disk/pixiv_dataset"
 
 # 数据库路径（可选，默认为 dataset.db）
 db_path: "dataset.db"
 
-# Cloudflare R2 配置
-r2:
-  # R2 bucket 的公开访问 URL
-  # 例如: "https://your-bucket.r2.dev"
-  base_url: "https://your-bucket.r2.dev"
+# 自动维护参数
+counts_config:
+  # 待评分图片数量低于此值时，维护任务会进入“补图批次”
+  min_wait: 20
 
-  # 图片在 R2 中的路径前缀
-  # 例如: "pixiv_dataset" 对应 R2 中的 /pixiv_dataset/ 路径
-  path_prefix: "pixiv_dataset"
+  # 已评分图片数量高于此值时，维护任务会把更旧的记录标为 deleted
+  max_done: 100
 
-  # Mock 模式下的本地 URL 前缀
-  # 用于在本地开发时访问图片
-  mock_base_url: "http://localhost:8000/static/mock_r2"
+  # 清理时保留最近 keep_count 张 done 图片
+  keep_count: 50
+
+  # 生产模式每次补图批次拉取的作品数量
+  fetch_count: 50
+
+  # 补图批次里单次最多处理多少个 bookmark job
+  bookmark_batch_size: 10
+
+  # 应用退出前冲刷 bookmark 队列时的批大小
+  bookmark_shutdown_batch_size: 50

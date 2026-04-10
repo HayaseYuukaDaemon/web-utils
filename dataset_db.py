@@ -66,7 +66,13 @@ class DatasetDB:
         print("数据库初始化完成")
 
     def ensure_runtime_schema(self) -> None:
-        """为已有数据库补齐运行时需要的增量表结构。"""
+        """
+        为已有数据库补齐运行时需要的增量表结构。
+
+        旧数据库只做最小增量迁移，不强制重建表结构；
+        因此这里补上的 `source_image_url` 列在 SQLite 层面可能仍是 nullable，
+        运行时由应用逻辑保证新写入记录必须提供该字段。
+        """
         with self.get_connection() as conn:
             columns = {
                 row["name"]
@@ -627,54 +633,3 @@ class JudgeScore:
         }
         return labels.get(score, "未知")
 
-
-# 测试代码
-if __name__ == "__main__":
-    # 初始化数据库
-    db = DatasetDB()
-    db.init_database()
-
-    # 测试添加单张图片
-    print("\n=== 测试添加单张图片 ===")
-    db.add_image(12345678, 0, "12345678_p0.jpg")
-
-    # 测试添加多张图片（一个作品）
-    print("\n=== 测试添加多张图片 ===")
-    filenames = [f"87654321_p{i}.jpg" for i in range(5)]
-    db.add_images(87654321, filenames)
-
-    # 测试评分
-    print("\n=== 测试评分 ===")
-    db.judge_image(12345678, 0, JudgeScore.LOVE)
-    db.judge_image(87654321, 0, JudgeScore.LIKE)
-    db.judge_image(87654321, 1, JudgeScore.NEUTRAL)
-
-    # 测试查询
-    print("\n=== 测试查询 ===")
-    image = db.get_image_by_offset(0)
-    print(f"第一张待评分图片: pid={image['pid']}, page={image['page_index']}")
-
-    image = db.get_image_by_offset(-1)
-    print(f"最近评分的图片: pid={image['pid']}, page={image['page_index']}, score={image['score']}")
-
-    # 查询作品的所有图片
-    images = db.get_images_by_pid(87654321)
-    print(f"\n作品 87654321 的所有图片 ({len(images)} 张):")
-    for img in images:
-        print(f"  page={img['page_index']}, score={img['score']}, status={img['status']}")
-
-    # 测试统计
-    print("\n=== 测试统计 ===")
-    stats = db.get_stats()
-    print(f"总图片数: {stats['total_images']}")
-    print(f"总作品数: {stats['total_works']}")
-    print(f"待评分: {stats['wait_count']}")
-    print(f"已评分: {stats['done_count']}")
-    print(f"评分分布: {stats['score_distribution']}")
-
-    # 测试导出训练数据
-    print("\n=== 导出训练数据 ===")
-    training_data = db.export_training_data()
-    print(f"训练数据 ({len(training_data)} 条):")
-    for pid, page, score in training_data:
-        print(f"  pid={pid}, page={page}, score={score} ({JudgeScore.get_label(score)})")
