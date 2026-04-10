@@ -298,7 +298,24 @@ if Path('mock_r2').exists():
     logger.info('已挂载 mock_r2 静态文件目录')
 
 # 包含 dataset 路由
-from dataset_api import dataset_router
+from dataset_api import dataset_router, dataset_service
 app.include_router(dataset_router)
 logger.info('已加载 dataset 路由')
+
+
+@app.on_event("shutdown")
+async def flush_dataset_bookmarks_on_shutdown():
+    """
+    在优雅退出阶段尽量冲刷待执行收藏任务。
+
+    第一次 Ctrl+C 会走到这里；若再次中断，uvicorn 会直接终止进程。
+    """
+    if dataset_service is None:
+        return
+
+    try:
+        result = await dataset_service.flush_pending_bookmark_jobs_on_shutdown()
+        logger.info(f'应用退出前收藏任务冲刷完成: {result}')
+    except Exception as e:
+        logger.error(f'应用退出前冲刷收藏任务失败: {e}', exc_info=True)
 # --- Dataset 评分系统结束 ---

@@ -543,6 +543,25 @@ class DatasetDB:
             print(f"获取待执行收藏任务失败: {e}")
             return []
 
+    def count_pending_bookmark_jobs(self) -> int:
+        """统计当前可执行的收藏任务数量。"""
+        now = datetime.now().isoformat()
+
+        try:
+            with self.get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM bookmark_jobs
+                    WHERE status = 'pending' AND next_retry_at <= ?
+                    """,
+                    (now,)
+                ).fetchone()
+                return int(row[0]) if row is not None else 0
+        except Exception as e:
+            print(f"统计待执行收藏任务失败: {e}")
+            return 0
+
     def mark_bookmark_job_done(self, pid: int) -> bool:
         """将收藏任务标记为已完成。"""
         now = datetime.now().isoformat()

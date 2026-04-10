@@ -271,6 +271,45 @@ class PixivDatasetService:
         async with self.create_pixiv_client() as pixiv:
             return await self._process_bookmark_jobs_with_client(pixiv, batch_size)
 
+    async def flush_pending_bookmark_jobs_on_shutdown(self, batch_size: int | None = None) -> dict:
+        """
+        在应用退出前尽量冲刷待执行收藏任务。
+
+        复用单个 Pixiv 会话处理多批任务；若进程在此期间再次收到中断，交由外层直接终止。
+        """
+        if batch_size is None:
+            batch_size = self.counts_config.get('bookmark_shutdown_batch_size', 50) if self.counts_config else 50
+
+        pending_count = self.db.count_pending_bookmark_jobs()
+        result = {
+            'pending_jobs_before': pending_count,
+            'queued_jobs': 0,
+            'bookmarked_works': 0,
+            'failed_jobs': 0,
+            'batches': 0,
+        }
+        if pending_count == 0:
+            self.logger.info('[收藏任务] 应用退出前无待处理收藏任务')
+            return result
+
+        self.logger.info(f'[收藏任务] 应用退出前开始冲刷收藏队列: pending={pending_count}')
+        async with self.create_pixiv_client() as pixiv:
+            while True:
+                batch_result = await self._process_bookmark_jobs_with_client(pixiv, batch_size)
+                queued_jobs = batch_result['queued_jobs']
+                if queued_jobs == 0:
+                    break
+                result['batches'] += 1
+                result['queued_jobs'] += queued_jobs
+                result['bookmarked_works'] += batch_result['bookmarked_works']
+                result['failed_jobs'] += batch_result['failed_jobs']
+
+                if queued_jobs < batch_size:
+                    break
+
+        self.logger.info(f'[收藏任务] 应用退出前冲刷完成: {result}')
+        return result
+
     def get_wait_count(self) -> int:
         """
         获取待评分图片数量
