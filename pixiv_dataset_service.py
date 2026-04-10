@@ -125,25 +125,6 @@ class PixivDatasetService:
 
         return works
 
-    async def fetch_recommended_works(self, count: int) -> list[WorkDetail]:
-        """
-        拉取推荐作品
-
-        Args:
-            count: 需要拉取的作品数量
-
-        Returns:
-            作品详情列表
-        """
-        self.logger.info(f'[拉取] 开始拉取推荐作品，目标数量: {count}')
-        self.logger.debug(f'[拉取] 当前配置 - proxy: {self.proxy}, mock_mode: {self.mock_mode}')
-
-        async with self.create_pixiv_client() as pixiv:
-            works = await self._fetch_recommended_works_with_client(pixiv, count)
-
-        self.logger.info(f'[拉取] 拉取完成，共 {len(works)} 份作品')
-        return works
-
     def _extract_work_image_records(self, work: WorkDetail) -> list[tuple[int, str, str]]:
         """
         从作品详情中提取图片页记录。
@@ -189,21 +170,10 @@ class PixivDatasetService:
         self.logger.info(f'[入库] 作品 {work.id} 处理完成: {success_count}/{len(image_records)} 张图片已写入数据库')
         return success_count
 
-    async def fetch_and_store(self, count: int) -> dict:
-        """
-        拉取推荐作品并把图片链接写入数据库
-
-        Args:
-            count: 需要拉取的作品数量
-
-        Returns:
-            统计信息字典
-        """
+    async def _fetch_and_store_with_client(self, pixiv: BetterPixiv, count: int) -> dict:
+        """在单个 Pixiv 会话内拉取推荐作品并写入数据库。"""
         self.logger.info(f'开始拉取并写入 {count} 份作品')
-
-        # 拉取推荐作品
-        works = await self.fetch_recommended_works(count)
-
+        works = await self._fetch_recommended_works_with_client(pixiv, count)
         if not works:
             self.logger.warning('没有拉取到作品')
             return {
@@ -235,6 +205,20 @@ class PixivDatasetService:
         self.logger.info(f'写入完成: {stats}')
         return stats
 
+    async def fetch_and_store(self, count: int) -> dict:
+        """
+        拉取推荐作品并把图片链接写入数据库
+
+        Args:
+            count: 需要拉取的作品数量
+
+        Returns:
+            统计信息字典
+        """
+        self.logger.debug(f'[拉取] 当前配置 - proxy: {self.proxy}, mock_mode: {self.mock_mode}')
+        async with self.create_pixiv_client() as pixiv:
+            return await self._fetch_and_store_with_client(pixiv, count)
+
     async def bookmark_illust(self, illust_id: int) -> None:
         """为单次收藏请求创建独立 Pixiv 会话。"""
         async with self.create_pixiv_client() as pixiv:
@@ -244,9 +228,9 @@ class PixivDatasetService:
         """根据失败次数计算下一次收藏任务的退避时间。"""
         return min(60 * (2 ** attempts), 6 * 60 * 60)
 
-    async def process_bookmark_jobs(self, batch_size: int | None = None) -> dict:
+    async def _process_bookmark_jobs_with_client(self, pixiv: BetterPixiv, batch_size: int | None = None) -> dict:
         """
-        批量处理收藏任务，在单个 Pixiv 会话内执行多个 bookmark 请求。
+        在单个 Pixiv 会话内批量处理收藏任务。
         """
         if batch_size is None:
             batch_size = self.counts_config.get('bookmark_batch_size', 10) if self.counts_config else 10
@@ -263,25 +247,29 @@ class PixivDatasetService:
 
         self.logger.info(f'[收藏任务] 开始处理 {len(jobs)} 个收藏任务')
 
-        async with self.create_pixiv_client() as pixiv:
-            for job in jobs:
-                pid = job['pid']
-                try:
-                    await pixiv.bookmark_illust(pid)
-                    self.db.mark_bookmark_job_done(pid)
-                    result['bookmarked_works'] += 1
-                    self.logger.info(f'[收藏任务] 收藏成功: pid={pid}')
-                except Exception as e:
-                    delay_seconds = self.get_bookmark_retry_delay_seconds(job['attempts'])
-                    self.db.mark_bookmark_job_retry(pid, delay_seconds, str(e))
-                    result['failed_jobs'] += 1
-                    self.logger.warning(
-                        f'[收藏任务] 收藏失败: pid={pid}, '
-                        f'下次重试 {delay_seconds}s 后, error={e}'
-                    )
+        for job in jobs:
+            pid = job['pid']
+            try:
+                await pixiv.bookmark_illust(pid)
+                self.db.mark_bookmark_job_done(pid)
+                result['bookmarked_works'] += 1
+                self.logger.info(f'[收藏任务] 收藏成功: pid={pid}')
+            except Exception as e:
+                delay_seconds = self.get_bookmark_retry_delay_seconds(job['attempts'])
+                self.db.mark_bookmark_job_retry(pid, delay_seconds, str(e))
+                result['failed_jobs'] += 1
+                self.logger.warning(
+                    f'[收藏任务] 收藏失败: pid={pid}, '
+                    f'下次重试 {delay_seconds}s 后, error={e}'
+                )
 
         self.logger.info(f'[收藏任务] 执行完成: {result}')
         return result
+
+    async def process_bookmark_jobs(self, batch_size: int | None = None) -> dict:
+        """批量处理收藏任务，为独立触发场景创建单独 Pixiv 会话。"""
+        async with self.create_pixiv_client() as pixiv:
+            return await self._process_bookmark_jobs_with_client(pixiv, batch_size)
 
     def get_wait_count(self) -> int:
         """
@@ -357,8 +345,6 @@ class PixivDatasetService:
             }
         }
 
-        result['bookmark_jobs'] = await self.process_bookmark_jobs()
-
         # 根据 mock_mode 决定拉取数量
         fetch_count = 10 if self.mock_mode else self.counts_config.get('fetch_count', 50)
         self.logger.info(f'[自动维护] 当前模式: {"测试模式" if self.mock_mode else "生产模式"}，拉取数量: {fetch_count}')
@@ -368,13 +354,15 @@ class PixivDatasetService:
         self.logger.info(f'[自动维护] 当前待评分图片: {wait_count} 张')
 
         if wait_count < min_wait:
-            self.logger.info(f'[自动维护] 待评分图片不足，开始拉取 {fetch_count} 份作品')
-            fetch_result = await self.fetch_and_store(fetch_count)
+            self.logger.info(f'[自动维护] 待评分图片不足，开始处理收藏任务并拉取 {fetch_count} 份作品')
+            async with self.create_pixiv_client() as pixiv:
+                result['bookmark_jobs'] = await self._process_bookmark_jobs_with_client(pixiv)
+                fetch_result = await self._fetch_and_store_with_client(pixiv, fetch_count)
             result['fetched_works'] = fetch_result['success_works']
             result['fetched_images'] = fetch_result['success_images']
             self.logger.info(f'[自动维护] 拉取完成: {result["fetched_works"]} 份作品，{result["fetched_images"]} 张图片')
         else:
-            self.logger.info(f'[自动维护] 待评分图片充足，无需拉取')
+            self.logger.info(f'[自动维护] 待评分图片充足，跳过收藏任务处理和拉取')
 
         # 2. 清理已评分图片
         stats = self.db.get_stats()

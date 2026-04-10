@@ -285,6 +285,90 @@
     <script>
         let currentOffset = 0;
         let currentImage = null;
+        let prefetchedNextWaitImage = null;
+        const imageInfoCache = new Map();
+        const imagePreloadCache = new Map();
+        let activeLoadToken = 0;
+
+        function getErrorPlaceholderSvg() {
+            return "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22><text x=%2250%%22 y=%2250%%22 text-anchor=%22middle%22>图片加载失败</text></svg>";
+        }
+
+        function renderImage(image) {
+            const container = document.getElementById('image-container');
+            container.innerHTML = `
+                <div class="image-info">
+                    PID: ${image.pid} | Page: ${image.page_index}
+                </div>
+                <img src="${image.image_url}" alt="Pixiv Image" onerror="this.src='${getErrorPlaceholderSvg()}'">
+            `;
+        }
+
+        async function fetchImageInfo(offset, { useCache = true } = {}) {
+            if (useCache && imageInfoCache.has(offset)) {
+                return imageInfoCache.get(offset);
+            }
+
+            const promise = fetch(`/dataset/image/info/offset/${offset}`).then(async (response) => {
+                if (!response.ok) {
+                    throw new Error('没有更多图片');
+                }
+                return response.json();
+            });
+
+            imageInfoCache.set(offset, promise);
+
+            try {
+                return await promise;
+            } catch (error) {
+                imageInfoCache.delete(offset);
+                throw error;
+            }
+        }
+
+        async function preloadImageUrl(imageUrl) {
+            if (!imageUrl) {
+                return;
+            }
+            if (imagePreloadCache.has(imageUrl)) {
+                return imagePreloadCache.get(imageUrl);
+            }
+
+            const promise = new Promise((resolve) => {
+                const img = new Image();
+                img.decoding = 'async';
+                img.onload = () => resolve(true);
+                img.onerror = () => resolve(false);
+                img.src = imageUrl;
+            });
+
+            imagePreloadCache.set(imageUrl, promise);
+            return promise;
+        }
+
+        async function prefetchOffset(offset, { markAsNextWait = false } = {}) {
+            try {
+                const image = await fetchImageInfo(offset);
+                if (!image?.image_url) {
+                    return null;
+                }
+                await preloadImageUrl(image.image_url);
+                if (markAsNextWait) {
+                    prefetchedNextWaitImage = image;
+                }
+                return image;
+            } catch (error) {
+                if (markAsNextWait) {
+                    prefetchedNextWaitImage = null;
+                }
+                return null;
+            }
+        }
+
+        function clearImageCaches() {
+            imageInfoCache.clear();
+            prefetchedNextWaitImage = null;
+        }
 
         // 加载统计信息
         async function loadStats() {
@@ -307,25 +391,29 @@
 
         // 加载图片
         async function loadImage(offset = 0) {
-            currentOffset = offset;
+            const loadToken = ++activeLoadToken;
             const container = document.getElementById('image-container');
             container.innerHTML = '<div class="loading">加载中...</div>';
 
             try {
-                const response = await fetch(`/dataset/image/info/offset/${offset}`);
-
-                if (!response.ok) {
-                    throw new Error('没有更多图片');
+                let image;
+                if (offset === 0 && prefetchedNextWaitImage) {
+                    image = prefetchedNextWaitImage;
+                    imageInfoCache.set(0, Promise.resolve(image));
+                    prefetchedNextWaitImage = null;
+                } else {
+                    image = await fetchImageInfo(offset);
                 }
 
-                currentImage = await response.json();
+                if (loadToken !== activeLoadToken) {
+                    return;
+                }
 
-                container.innerHTML = `
-                    <div class="image-info">
-                        PID: ${currentImage.pid} | Page: ${currentImage.page_index}
-                    </div>
-                    <img src="${currentImage.image_url}" alt="Pixiv Image" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22><text x=%2250%%22 y=%2250%%22 text-anchor=%22middle%22>图片加载失败</text></svg>'">
-                `;
+                currentOffset = offset;
+                currentImage = image;
+                renderImage(image);
+
+                prefetchOffset(offset + 1, { markAsNextWait: offset === 0 });
             } catch (error) {
                 container.innerHTML = `<div class="loading">❌ ${error.message}</div>`;
                 showToast('加载失败: ' + error.message, 'error');
@@ -361,6 +449,10 @@
 
                     // 刷新统计（后台维护任务会自动更新数据）
                     await loadStats();
+
+                    const nextImageAfterJudge = currentOffset === 0 ? prefetchedNextWaitImage : null;
+                    clearImageCaches();
+                    prefetchedNextWaitImage = nextImageAfterJudge;
 
                     // 加载下一张
                     await loadImage(0);
