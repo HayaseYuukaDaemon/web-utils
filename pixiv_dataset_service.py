@@ -1,10 +1,11 @@
 """
 Pixiv 数据集服务模块
 
-负责从 Pixiv 获取推荐作品、下载到本地并维护数据集状态。
+负责从 Pixiv 获取推荐作品、写入数据集并维护任务状态。
 """
 
 import asyncio
+from urllib.parse import quote
 from pathlib import Path
 from typing import Optional
 
@@ -16,50 +17,38 @@ from setup_logger import get_logger
 
 
 class PixivDatasetService:
-    """Pixiv 数据集服务，负责抓取、落盘、入库和维护。"""
+    """Pixiv 数据集服务，负责抓取、入库和维护。"""
+
+    DOCUMENT_WORKER_BASE_URL = "https://document-worker.hayaseyuuka.date/"
+    PIXIV_REFERER_URL = "https://www.pixiv.net/"
 
     def __init__(self,
                  refresh_token: str,
                  proxy: Optional[str] = None,
-                 storage_path: Path = Path("./mock_r2/pixiv_dataset/judge_wait"),
                  db_path: str = "dataset.db",
-                 r2_base_url: Optional[str] = None,
-                 r2_path_prefix: str = "pixiv_dataset",
                  counts_config: dict | None = None,
                  mock_mode: bool = True):
         """
-        初始化拉取器
+        初始化数据集服务
 
         Args:
             refresh_token: Pixiv refresh token
             proxy: 代理地址，如 'http://127.0.0.1:10809'
-            storage_path: 图片存储目录
             db_path: 数据库路径
-            r2_base_url: R2 bucket 的公开访问 URL
-            r2_path_prefix: 图片在 R2 中的路径前缀
             mock_mode: 是否为 mock 模式（本地开发）
         """
         self.logger = get_logger('PixivDatasetService')
         self.refresh_token = refresh_token
         self.proxy = proxy
-        self.storage_path = Path(storage_path).expanduser()
         self.db = DatasetDB(db_path)
-        self.r2_base_url = r2_base_url
-        self.r2_path_prefix = r2_path_prefix
         self.mock_mode = mock_mode
         self.counts_config = counts_config or {}
-
-        # 确保存储目录存在
-        if not self.storage_path.exists():
-            self.storage_path.mkdir(parents=True)
-            self.logger.info(f'创建存储目录: {self.storage_path}')
 
     def create_pixiv_client(self) -> BetterPixiv:
         """创建一个新的 BetterPixiv 上下文实例。"""
         return BetterPixiv(
             proxy=self.proxy,
             refresh_token=self.refresh_token,
-            storage_path=self.storage_path,
             logger=self.logger
         )
 
@@ -70,7 +59,7 @@ class PixivDatasetService:
     @classmethod
     def from_config(cls, config_path: str = "pixiv_config.yaml"):
         """
-        从配置文件创建拉取器
+        从配置文件创建数据集服务
 
         Args:
             config_path: 配置文件路径
@@ -88,53 +77,60 @@ class PixivDatasetService:
         # 判断是否为 mock 模式
         mock_mode = config.get('mock_mode', True)
 
-        # 根据 mock 模式选择存储路径
-        storage_config = config.get('storage_path', {})
-        if isinstance(storage_config, dict):
-            storage_base = storage_config.get('mock' if mock_mode else 'production')
-        else:
-            storage_base = storage_config
-
-        storage_base = Path(storage_base).expanduser()
-        storage_path = storage_base / 'judge_wait'
-
-        # 获取 R2 配置
-        r2_config = config.get('r2', {})
-
-        # 根据 mock 模式选择 base_url
-        if mock_mode:
-            r2_base_url = r2_config.get('mock_base_url', 'http://localhost:8000/static/mock_r2')
-        else:
-            r2_base_url = r2_config.get('base_url')
-
         return cls(
             refresh_token=config['refresh_token'],
             proxy=config.get('proxy'),
-            storage_path=storage_path,
             db_path=config.get('db_path', 'dataset.db'),
-            r2_base_url=r2_base_url,
-            r2_path_prefix=r2_config.get('path_prefix', 'pixiv_dataset'),
             counts_config=config.get('counts_config', {}),
             mock_mode=mock_mode
         )
 
-    def get_r2_url(self, filename: str, status: str = 'wait') -> Optional[str]:
-        """
-        生成图片的 R2 访问 URL
+    def get_proxied_image_url(self, source_image_url: str | None) -> Optional[str]:
+        """生成经 document-worker 反代后的图片访问 URL。"""
+        if not source_image_url:
+            return None
+        encoded_image_url = quote(source_image_url, safe="")
+        encoded_referer = quote(self.PIXIV_REFERER_URL, safe="")
+        return (
+            f"{self.DOCUMENT_WORKER_BASE_URL}"
+            f"?urlToProxy={encoded_image_url}"
+            f"&refererURL={encoded_referer}"
+        )
 
-        Args:
-            filename: 文件名，如 '12345678_p0.jpg'
-            status: 图片状态（已废弃，所有图片都在同一目录）
+    def get_work_image_source_url(self, work: WorkDetail, page_index: int) -> str | None:
+        """从作品详情中取指定页的原图 URL。"""
+        image_records = self._extract_work_image_records(work)
+        for record_page_index, _filename, source_image_url in image_records:
+            if record_page_index == page_index:
+                return source_image_url
+        return None
 
-        Returns:
-            R2 URL，如果未配置 R2 则返回 None
+    async def ensure_source_image_url(self, pid: int, page_index: int) -> str | None:
         """
-        if not self.r2_base_url:
+        确保数据库里存在源图片 URL。
+
+        对旧数据做懒回填：首次访问时再调用 Pixiv API 补齐 source_image_url。
+        """
+        image = self.db.get_image_by_pid_page(pid, page_index)
+        if not image:
+            return None
+        if image.get("source_image_url"):
+            return image["source_image_url"]
+
+        self.logger.info(f'[图片链接] 检测到旧记录缺少 source_image_url，开始回填: pid={pid}, page={page_index}')
+        async with self.create_pixiv_client() as pixiv:
+            work = await pixiv.get_work_details(pid)
+        if work is None:
+            self.logger.warning(f'[图片链接] 回填失败，作品不存在: pid={pid}')
             return None
 
-        # 所有图片统一存储在 judge_wait 目录
-        url = f"{self.r2_base_url.rstrip('/')}/{self.r2_path_prefix}/judge_wait/{filename}"
-        return url
+        source_image_url = self.get_work_image_source_url(work, page_index)
+        if not source_image_url:
+            self.logger.warning(f'[图片链接] 回填失败，作品中不存在对应页: pid={pid}, page={page_index}')
+            return None
+
+        self.db.update_image_source_url(pid, page_index, source_image_url)
+        return source_image_url
 
     async def _fetch_recommended_works_with_client(
             self,
@@ -183,76 +179,54 @@ class PixivDatasetService:
         self.logger.info(f'[拉取] 拉取完成，共 {len(works)} 份作品')
         return works
 
-    async def _download_and_save_work(self, work: WorkDetail, pixiv: BetterPixiv) -> int:
+    def _extract_work_image_records(self, work: WorkDetail) -> list[tuple[int, str, str]]:
         """
-        下载作品的所有图片并保存到数据库
-
-        Args:
-            work: 作品详情
+        从作品详情中提取图片页记录。
 
         Returns:
-            成功添加到数据库的图片数量
+            [(page_index, filename, source_image_url), ...]
         """
-        self.logger.info(f'[下载] 开始处理作品: pid={work.id}, title={work.title}, pages={work.page_count}')
-        self.logger.debug(f'[下载] 作品类型: {work.type}, 存储路径: {self.storage_path}')
+        records: list[tuple[int, str, str]] = []
+        if work.type not in ("illust", "ugoira"):
+            return records
 
-        # 下载作品
-        self.logger.debug(f'[下载] 调用 pixiv.download() 下载作品...')
-        download_result = await pixiv.download([work], max_workers=3)
+        if work.meta_pages:
+            for page_index, meta_page in enumerate(work.meta_pages):
+                source_image_url = meta_page.image_urls.original
+                filename = Path(source_image_url.split("/")[-1]).name
+                records.append((page_index, filename, source_image_url))
+            return records
 
-        self.logger.debug(f'[下载] 下载结果: success_units={len(download_result.success_units)}, failed_units={len(download_result.failed_units)}')
+        if work.meta_single_page and work.meta_single_page.original_image_url:
+            source_image_url = work.meta_single_page.original_image_url
+            filename = Path(source_image_url.split("/")[-1]).name
+            records.append((0, filename, source_image_url))
+        return records
 
-        if not download_result.success_units:
-            self.logger.warning(f'[下载] 作品 {work.id} 下载失败')
+    def _store_work_image_records(self, work: WorkDetail) -> int:
+        """把作品图片页记录写入数据库，不下载文件。"""
+        self.logger.info(f'[入库] 开始处理作品: pid={work.id}, title={work.title}, pages={work.page_count}')
+        image_records = self._extract_work_image_records(work)
+        if not image_records:
+            self.logger.warning(f'[入库] 作品 {work.id} 没有可用图片链接')
             return 0
 
-        # 获取下载成功的文件列表
-        if isinstance(download_result.success_units[0], Path):
-            # 单个作品下载成功，success_units 是文件路径列表
-            downloaded_files = download_result.success_units
-            self.logger.debug(f'[下载] 下载模式: 单作品，文件列表长度: {len(downloaded_files)}')
-        else:
-            # 批量下载，success_units 是 DownloadResult 列表
-            downloaded_files = download_result.success_units[0].success_units
-            self.logger.debug(f'[下载] 下载模式: 批量，文件列表长度: {len(downloaded_files)}')
-
-        # 添加到数据库
         success_count = 0
-        for idx, file_path in enumerate(downloaded_files):
-            if not isinstance(file_path, Path):
-                self.logger.warning(f'[下载] 跳过非 Path 对象: {file_path}')
-                continue
-
-            # 从文件名解析 page_index
-            # 文件名格式: {pid}_p{page_index}.{ext}
-            filename = file_path.name
-            self.logger.debug(f'[下载] 处理文件 {idx+1}/{len(downloaded_files)}: {filename}')
-
-            try:
-                # 提取 page_index
-                parts = filename.split('_p')
-                if len(parts) == 2:
-                    page_index = int(parts[1].split('.')[0])
-                else:
-                    page_index = 0
-                self.logger.debug(f'[下载] 解析 page_index: {page_index}')
-            except (ValueError, IndexError) as e:
-                self.logger.warning(f'[下载] 无法解析文件名: {filename}，使用 page_index=0, 错误: {e}')
-                page_index = 0
-
-            # 添加到数据库
-            if self.db.add_image(work.id, page_index, filename):
+        for page_index, filename, source_image_url in image_records:
+            if self.db.add_image(work.id, page_index, filename, source_image_url):
                 success_count += 1
-                self.logger.debug(f'[下载] 已添加到数据库: pid={work.id}, page={page_index}, filename={filename}')
+                self.logger.debug(
+                    f'[入库] 已添加到数据库: pid={work.id}, page={page_index}, filename={filename}'
+                )
             else:
-                self.logger.warning(f'[下载] 添加到数据库失败: pid={work.id}, page={page_index}')
+                self.logger.warning(f'[入库] 添加到数据库失败: pid={work.id}, page={page_index}')
 
-        self.logger.info(f'[下载] 作品 {work.id} 处理完成: {success_count}/{work.page_count} 张图片已添加到数据库')
+        self.logger.info(f'[入库] 作品 {work.id} 处理完成: {success_count}/{len(image_records)} 张图片已写入数据库')
         return success_count
 
-    async def fetch_and_download(self, count: int) -> dict:
+    async def fetch_and_store(self, count: int) -> dict:
         """
-        拉取并下载推荐作品
+        拉取推荐作品并把图片链接写入数据库
 
         Args:
             count: 需要拉取的作品数量
@@ -260,7 +234,7 @@ class PixivDatasetService:
         Returns:
             统计信息字典
         """
-        self.logger.info(f'开始拉取并下载 {count} 份作品')
+        self.logger.info(f'开始拉取并写入 {count} 份作品')
 
         # 拉取推荐作品
         works = await self.fetch_recommended_works(count)
@@ -274,18 +248,17 @@ class PixivDatasetService:
                 'success_images': 0
             }
 
-        # 下载并保存
+        # 写入数据库
         total_images = 0
         success_images = 0
         success_works = 0
-
-        async with self.create_pixiv_client() as pixiv:
-            for work in works:
-                total_images += work.page_count
-                count = await self._download_and_save_work(work, pixiv)
-                success_images += count
-                if count > 0:
-                    success_works += 1
+        for work in works:
+            image_records = self._extract_work_image_records(work)
+            total_images += len(image_records)
+            count = self._store_work_image_records(work)
+            success_images += count
+            if count > 0:
+                success_works += 1
 
         stats = {
             'total_works': len(works),
@@ -294,7 +267,7 @@ class PixivDatasetService:
             'success_images': success_images
         }
 
-        self.logger.info(f'拉取完成: {stats}')
+        self.logger.info(f'写入完成: {stats}')
         return stats
 
     async def bookmark_illust(self, illust_id: int) -> None:
@@ -367,7 +340,7 @@ class PixivDatasetService:
         Returns:
             删除的图片数量
         """
-        self.logger.info(f'开始清理已评分图片，保留最近 {keep_count} 张')
+        self.logger.info(f'开始清理已评分图片状态，保留最近 {keep_count} 张')
 
         # 获取需要删除的图片
         to_delete = self.db.get_images_to_cleanup(keep_count)
@@ -378,22 +351,12 @@ class PixivDatasetService:
 
         deleted_count = 0
         for image in to_delete:
-            # 构建文件路径
-            file_path = self.storage_path / image['local_filename']
-
-            # 删除文件
             try:
-                if file_path.exists():
-                    file_path.unlink()
-                    self.logger.debug(f'已删除文件: {file_path.name}')
-                else:
-                    self.logger.warning(f'文件不存在: {file_path.name}')
-
-                # 更新数据库状态
+                # 不再落盘图片，只切换数据库状态以压缩活跃评分集合。
                 self.db.update_status(image['pid'], image['page_index'], 'deleted')
                 deleted_count += 1
             except Exception as e:
-                self.logger.error(f'删除文件失败: {file_path.name}, 错误: {e}')
+                self.logger.error(f'更新图片状态失败: pid={image["pid"]}, page={image["page_index"]}, 错误: {e}')
 
         self.logger.info(f'清理完成，删除了 {deleted_count} 张图片')
         return deleted_count
@@ -441,7 +404,7 @@ class PixivDatasetService:
 
         if wait_count < min_wait:
             self.logger.info(f'[自动维护] 待评分图片不足，开始拉取 {fetch_count} 份作品')
-            fetch_result = await self.fetch_and_download(fetch_count)
+            fetch_result = await self.fetch_and_store(fetch_count)
             result['fetched_works'] = fetch_result['success_works']
             result['fetched_images'] = fetch_result['success_images']
             self.logger.info(f'[自动维护] 拉取完成: {result["fetched_works"]} 份作品，{result["fetched_images"]} 张图片')

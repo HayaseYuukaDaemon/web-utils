@@ -1,7 +1,7 @@
 """
 图片访问 API 端点
 
-提供图片访问接口，redirect 到 Cloudflare R2
+提供图片访问接口，重定向到 document-worker 反代后的 Pixiv 原图地址。
 """
 
 import asyncio
@@ -69,7 +69,7 @@ class StatsResponse(BaseModel):
                     dependencies=[Depends(Authoricator([UserAbilities.DATASET_USE]))])
 async def get_image_by_offset(offset: int):
     """
-    按 offset 获取图片（redirect 到 R2）
+    按 offset 获取图片（redirect 到图片反代 URL）
 
     Args:
         offset: 偏移量
@@ -77,20 +77,21 @@ async def get_image_by_offset(offset: int):
             - offset < 0: 获取倒数第 abs(offset) 张已评分图片
 
     Returns:
-        RedirectResponse: 重定向到 R2 URL
+        RedirectResponse: 重定向到图片反代 URL
     """
     # 从数据库查询图片
     image = db.get_image_by_offset(offset)
     if not image:
         raise HTTPException(status_code=404, detail="图片不存在")
 
-    # 生成 R2 URL
-    if dataset_service and dataset_service.r2_base_url:
-        r2_url = dataset_service.get_r2_url(image['local_filename'], image['status'])
-        if r2_url:
-            return RedirectResponse(url=r2_url, status_code=302)
+    source_image_url = image.get('source_image_url')
+    if dataset_service and not source_image_url:
+        source_image_url = await dataset_service.ensure_source_image_url(image['pid'], image['page_index'])
+    image_url = dataset_service.get_proxied_image_url(source_image_url) if dataset_service else None
+    if image_url:
+        return RedirectResponse(url=image_url, status_code=302)
 
-    raise HTTPException(status_code=500, detail="R2 未配置")
+    raise HTTPException(status_code=500, detail="图片代理 URL 未配置")
 
 
 @dataset_router.get('/image/info/offset/{offset}',
@@ -104,16 +105,16 @@ async def get_image_info_by_offset(offset: int):
         offset: 偏移量
 
     Returns:
-        ImageResponse: 图片信息（包含 R2 URL）
+        ImageResponse: 图片信息（包含图片反代 URL）
     """
     image = db.get_image_by_offset(offset)
     if not image:
         raise HTTPException(status_code=404, detail="图片不存在")
 
-    # 生成 R2 URL
-    image_url = None
-    if dataset_service and dataset_service.r2_base_url:
-        image_url = dataset_service.get_r2_url(image['local_filename'], image['status'])
+    source_image_url = image.get('source_image_url')
+    if dataset_service and not source_image_url:
+        source_image_url = await dataset_service.ensure_source_image_url(image['pid'], image['page_index'])
+    image_url = dataset_service.get_proxied_image_url(source_image_url) if dataset_service else None
 
     return ImageResponse(
         pid=image['pid'],
@@ -130,28 +131,28 @@ async def get_image_info_by_offset(offset: int):
                     dependencies=[Depends(Authoricator([UserAbilities.DATASET_USE]))])
 async def get_image(pid: int, page_index: int):
     """
-    获取图片（redirect 到 R2）
+    获取图片（redirect 到图片反代 URL）
 
     Args:
         pid: Pixiv 作品 ID
         page_index: 页码索引
 
     Returns:
-        RedirectResponse: 重定向到 R2 URL
+        RedirectResponse: 重定向到图片反代 URL
     """
     # 从数据库查询图片信息
     image = db.get_image_by_pid_page(pid, page_index)
     if not image:
         raise HTTPException(status_code=404, detail="图片不存在")
 
-    # 生成 R2 URL
-    if dataset_service and dataset_service.r2_base_url:
-        r2_url = dataset_service.get_r2_url(image['local_filename'], image['status'])
-        if r2_url:
-            return RedirectResponse(url=r2_url, status_code=302)
+    source_image_url = image.get('source_image_url')
+    if dataset_service and not source_image_url:
+        source_image_url = await dataset_service.ensure_source_image_url(image['pid'], image['page_index'])
+    image_url = dataset_service.get_proxied_image_url(source_image_url) if dataset_service else None
+    if image_url:
+        return RedirectResponse(url=image_url, status_code=302)
 
-    # 如果没有配置 R2，返回错误
-    raise HTTPException(status_code=500, detail="R2 未配置")
+    raise HTTPException(status_code=500, detail="图片代理 URL 未配置")
 
 
 # 后台维护任务

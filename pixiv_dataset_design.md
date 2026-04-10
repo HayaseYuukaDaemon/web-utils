@@ -58,9 +58,10 @@
            │
            ▼
     ┌──────────────────────────────────┐
-    │  mock_r2/pixiv_dataset/          │
-    │  judge_wait/                     │
-    │  (所有图片统一存储在同一目录)      │
+    │      SQLite 数据库               │
+    │  - local_filename               │
+    │  - source_image_url             │
+    │  (不再缓存图片文件)               │
     └──────────────────────────────────┘
 ```
 
@@ -74,7 +75,7 @@
 
 ### 1. 作品拉取
 - 从 Pixiv 获取个性化推荐（使用 `better_pixiv.py`）
-- 下载图片到 `judge_wait/` 目录（Mock 模式：`mock_r2/pixiv_dataset/judge_wait/`）
+- 直接从 `WorkDetail` 提取每一页的原图链接
 - 记录到数据库，状态为 `wait`，评分为 `NULL`
 
 ### 2. 评分流程
@@ -94,14 +95,14 @@
 ### 3. 存储管理
 
 **设计理念**：
-- **所有图片统一存储在 `judge_wait/` 目录**（不区分 wait/done）
-- 通过数据库 `status` 字段区分待评分、已评分和已删除
-- 按需清理文件，保持存储空间可控
+- 不再下载和缓存图片文件
+- 数据库只保存图片页记录和 Pixiv 原图 URL
+- 展示图片时由后端重定向到 `document-worker` 反代 URL
 
-**文件管理策略**：
+**活跃集合管理策略**：
 - 待评分图片（`status='wait'`）：保持 `min_wait` 张以上（默认 20 张，Mock 模式 20 张）
-- 已评分图片（`status='done'`）：上限 `max_done` 张（默认 100 张），超出时按评分时间升序删除最旧的
-- 已删除图片（`status='deleted'`）：文件已清理，数据库保留记录
+- 已评分图片（`status='done'`）：上限 `max_done` 张（默认 100 张）
+- 已清理图片（`status='deleted'`）：仅表示移出活跃评分集合，数据库记录仍保留
 
 ### 4. 评分后的自动维护
 
@@ -115,7 +116,7 @@ min_wait = counts_config.get('min_wait', 20)  # Mock: 20, 生产: 20
 if wait_count < min_wait:
     fetch_count = 10 if mock_mode else counts_config.get('fetch_count', 50)
     # Mock 模式拉取 10 份作品，生产模式拉取 fetch_count 份
-    fetch_and_download(fetch_count)
+    fetch_and_store(fetch_count)
 ```
 
 **4.2 清理已评分图片（LRU 策略）**
@@ -132,7 +133,6 @@ if done_count > max_done:
                 LIMIT (done_count - keep_count)
 
     for image in to_delete:
-        delete_file(image.local_filename)
         UPDATE images SET status='deleted' WHERE id=image.id
 ```
 
@@ -163,8 +163,9 @@ CREATE TABLE images (
     fetched_at TEXT NOT NULL,  -- ISO 8601 格式
     judged_at TEXT,            -- 评分时间
 
-    -- 文件管理
-    local_filename TEXT,  -- 文件名，如 '12345678_p0.jpg'
+    -- 图片来源
+    local_filename TEXT,     -- 由原图 URL basename 派生的文件名
+    source_image_url TEXT,   -- Pixiv 原图 URL
 
     -- 唯一约束
     UNIQUE(pid, page_index)  -- 同一作品的同一页只能有一条记录
@@ -190,9 +191,9 @@ CREATE INDEX idx_fetched_page ON images(fetched_at, page_index);
 - 作品数量：`COUNT(DISTINCT pid)`
 
 **状态字段**：
-- `wait`：待评分（图片文件存在于 `judge_wait/` 目录）
-- `done`：已评分（图片文件仍存在于 `judge_wait/` 目录）
-- `deleted`：已删除（图片文件已清理，数据库保留评分记录）
+- `wait`：待评分
+- `done`：已评分
+- `deleted`：已从活跃评分集合中清理，数据库保留评分记录
 
 **评分字段**：
 - `NULL`：未评分
@@ -266,7 +267,7 @@ else:
   "pid": 12345678,
   "page_index": 0,
   "filename": "12345678_p0.jpg",
-  "image_url": "http://localhost:8000/mock_r2/pixiv_dataset/judge_wait/12345678_p0.jpg",
+  "image_url": "https://document-worker.hayaseyuuka.date/?urlToProxy=https%3A%2F%2Fi.pximg.net%2F...&refererURL=https%3A%2F%2Fwww.pixiv.net%2F",
   "score": null,
   "status": "wait",
   "judged_at": null
@@ -278,20 +279,20 @@ else:
 ---
 
 ### GET /dataset/image/offset/{offset}
-获取图片（redirect 到 R2）
+获取图片（redirect 到图片反代 URL）
 
 **功能**：与 `/dataset/image/info/offset/{offset}` 相同，但直接返回 302 重定向到图片 URL
 
-**返回**：`302 Redirect` 到 R2 URL
+**返回**：`302 Redirect` 到图片反代 URL
 
 ---
 
 ### GET /dataset/image/{pid}/{page_index}
-获取指定图片（redirect 到 R2）
+获取指定图片（redirect 到图片反代 URL）
 
 **功能**：通过 pid 和 page_index 精确获取某张图片
 
-**返回**：`302 Redirect` 到 R2 URL
+**返回**：`302 Redirect` 到图片反代 URL
 
 ---
 
@@ -393,18 +394,11 @@ my_utils/
 ├── dataset_schema.sql          # 数据库 Schema
 ├── site_utils.py               # 认证中间件和权限控制
 ├── setup_logger.py             # 日志配置
-├── pixiv_config.yaml           # Pixiv 配置（token、代理、存储路径等）
+├── pixiv_config.yaml           # Pixiv 配置（token、代理、维护参数等）
 ├── dataset.db                  # SQLite 数据库文件
-├── mock_r2/                    # Mock 存储（本地开发）
-│   └── pixiv_dataset/
-│       └── judge_wait/         # 所有图片统一存储在此目录
-│           ├── 12345678_p0.jpg
-│           └── ...
 └── templates/
     └── dataset.html            # 评分界面模板
 ```
-
-> **注意**：生产环境中，图片存储在 Cloudflare R2（通过 `r2.base_url` 配置），但逻辑上仍统一在 `judge_wait/` 路径下。
 
 ---
 
@@ -415,6 +409,7 @@ my_utils/
 - **Pixiv API**：`better_pixiv.py`（基于 pixivpy-async）
 - **后台任务**：FastAPI BackgroundTasks + asyncio.Lock
 - **前端**：HTML + JavaScript（简单的评分界面）
+- **图片访问**：`document-worker` 反代 Pixiv 原图
 - **认证**：基于 `auth_token` 的权限控制（`site_utils.py`）
 
 ---
@@ -429,23 +424,12 @@ refresh_token: "your_refresh_token"
 proxy: "http://127.0.0.1:10809"
 
 # Mock 模式
-# true: 本地开发，拉取数量少（10 份），使用本地存储
+# true: 本地开发，拉取数量少（10 份）
 # false: 生产环境
 mock_mode: true
 
-# 图片存储目录
-storage_path:
-  mock: "./mock_r2/pixiv_dataset"
-  production: "~/cf_r2/cf-disk/pixiv_dataset"
-
 # 数据库路径
 db_path: "dataset.db"
-
-# Cloudflare R2 配置
-r2:
-  base_url: "https://your-bucket.r2.dev"
-  path_prefix: "pixiv_dataset"
-  mock_base_url: "http://localhost:8000/mock_r2"
 
 # 维护任务数量配置（counts_config）
 counts_config:
@@ -493,9 +477,15 @@ if request.score > 1 and dataset_service:
 
 后台维护任务会批量消费这些 job，并在单个 Pixiv 会话内执行多个 `bookmark_illust(pid)`，避免每次评分都单独登录一次 Pixiv。
 
-### 3. 统一存储策略
+### 3. 图片访问策略
 
-所有图片（无论是否已评分）均存储在 `judge_wait/` 目录，通过数据库 `status` 字段区分。不在文件系统层面区分 `judge_wait/` 和 `judge_done/`。
+所有图片请求都基于数据库中的 `source_image_url` 动态生成反代地址：
+
+```text
+https://document-worker.hayaseyuuka.date/?urlToProxy={图片链接}&refererURL=https://www.pixiv.net/
+```
+
+旧数据若缺少 `source_image_url`，在首次访问时会懒回填。
 
 ### 4. 认证机制
 
@@ -521,9 +511,9 @@ dependencies=[Depends(Authoricator([UserAbilities.DATASET_USE]))]
 ## 注意事项
 
 1. **VPS 空间管理**：
-   - 所有图片统一存储在 `judge_wait/` 目录
-   - 定期清理已评分图片（LRU 策略，保留最近 50 张）
-   - 数据库只存 pid，不存图片元数据
+   - 不再缓存图片文件
+   - 定期清理已评分图片状态（LRU 策略，保留最近 50 张）
+   - 数据库保存 `pid/page_index/score/source_image_url`
 
 2. **Pixiv 作品删除风险**：
    - 训练时可能遇到作品被删除

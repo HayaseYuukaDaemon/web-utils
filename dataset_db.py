@@ -68,6 +68,13 @@ class DatasetDB:
     def ensure_runtime_schema(self) -> None:
         """为已有数据库补齐运行时需要的增量表结构。"""
         with self.get_connection() as conn:
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(images)").fetchall()
+            }
+            if "source_image_url" not in columns:
+                conn.execute("ALTER TABLE images ADD COLUMN source_image_url TEXT")
+
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS bookmark_jobs (
@@ -89,6 +96,7 @@ class DatasetDB:
             )
 
     def add_image(self, pid: int, page_index: int, local_filename: str,
+                  source_image_url: str | None = None,
                   fetched_at: Optional[str] = None) -> bool:
         """
         添加单张图片
@@ -97,6 +105,7 @@ class DatasetDB:
             pid: Pixiv 作品 ID
             page_index: 页码索引（从 0 开始）
             local_filename: 本地文件名
+            source_image_url: 图片原始 URL
             fetched_at: 拉取时间（ISO 8601 格式），默认为当前时间
 
         Returns:
@@ -109,10 +118,10 @@ class DatasetDB:
             with self.get_connection() as conn:
                 conn.execute(
                     """
-                    INSERT INTO images (pid, page_index, local_filename, fetched_at, status)
-                    VALUES (?, ?, ?, ?, 'wait')
+                    INSERT INTO images (pid, page_index, local_filename, source_image_url, fetched_at, status)
+                    VALUES (?, ?, ?, ?, ?, 'wait')
                     """,
-                    (pid, page_index, local_filename, fetched_at)
+                    (pid, page_index, local_filename, source_image_url, fetched_at)
                 )
             print(f"添加图片成功: pid={pid}, page={page_index}, filename={local_filename}")
             return True
@@ -123,13 +132,20 @@ class DatasetDB:
             print(f"添加图片失败: {e}")
             return False
 
-    def add_images(self, pid: int, filenames: list[str], fetched_at: Optional[str] = None) -> int:
+    def add_images(
+            self,
+            pid: int,
+            filenames: list[str],
+            source_image_urls: list[str] | None = None,
+            fetched_at: Optional[str] = None
+    ) -> int:
         """
         批量添加一个作品的多张图片
 
         Args:
             pid: Pixiv 作品 ID
             filenames: 文件名列表（按页码顺序）
+            source_image_urls: 原图 URL 列表（按页码顺序）
             fetched_at: 拉取时间（ISO 8601 格式），默认为当前时间
 
         Returns:
@@ -140,7 +156,10 @@ class DatasetDB:
 
         success_count = 0
         for page_index, filename in enumerate(filenames):
-            if self.add_image(pid, page_index, filename, fetched_at):
+            source_image_url = None
+            if source_image_urls and page_index < len(source_image_urls):
+                source_image_url = source_image_urls[page_index]
+            if self.add_image(pid, page_index, filename, source_image_url, fetched_at):
                 success_count += 1
 
         print(f"批量添加完成: pid={pid}, 成功 {success_count}/{len(filenames)} 张")
@@ -256,6 +275,23 @@ class DatasetDB:
             return True
         except Exception as e:
             print(f"修改状态失败: {e}")
+            return False
+
+    def update_image_source_url(self, pid: int, page_index: int, source_image_url: str) -> bool:
+        """更新图片原始 URL。"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE images
+                    SET source_image_url = ?
+                    WHERE pid = ? AND page_index = ?
+                    """,
+                    (source_image_url, pid, page_index)
+                )
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"更新图片原始 URL 失败: {e}")
             return False
 
     def get_image_by_offset(self, offset: int) -> Optional[dict]:

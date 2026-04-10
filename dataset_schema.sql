@@ -44,9 +44,9 @@ CREATE TABLE images (
 
     -- ========== 状态管理 ==========
     -- 图片状态
-    -- 'wait' = 待评分（位于 judge_wait 目录）
-    -- 'done' = 已评分（仍位于 judge_wait 目录，通过 status 字段区分）
-    -- 'deleted' = 已删除（图片文件已清理，但保留评分记录）
+    -- 'wait' = 待评分
+    -- 'done' = 已评分
+    -- 'deleted' = 已从活跃评分集合中清理，但保留评分记录
     status TEXT DEFAULT 'wait' CHECK(status IN ('wait', 'done', 'deleted')),
 
     -- ========== 时间戳 ==========
@@ -56,11 +56,12 @@ CREATE TABLE images (
     -- 评分时间（ISO 8601 格式，NULL 表示未评分）
     judged_at TEXT,
 
-    -- ========== 文件管理 ==========
-    -- 本地文件名（只存文件名，不存完整路径）
-    -- 例如: '12345678_p0.jpg' 或 '87654321_p2.png'
-    -- 用于文件移动和清理操作
+    -- ========== 图片来源 ==========
+    -- 本地文件名（通常由 Pixiv 原图 URL 的 basename 派生）
     local_filename TEXT,
+
+    -- Pixiv 原图 URL，用于请求时经 document-worker 反代访问
+    source_image_url TEXT,
 
     -- ========== 唯一约束 ==========
     -- 同一作品的同一页只能有一条记录
