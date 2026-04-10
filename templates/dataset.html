@@ -439,10 +439,10 @@
 
             try {
                 let image;
-                if (offset === 0 && prefetchedNextWaitImage) {
-                    image = prefetchedNextWaitImage;
+                if (offset === 0 && prefetchedWaitImages.length > 0) {
+                    [image] = prefetchedWaitImages;
                     imageInfoCache.set(0, Promise.resolve(image));
-                    prefetchedNextWaitImage = null;
+                    prefetchedWaitImages = [];
                 } else {
                     image = await fetchImageInfo(offset);
                 }
