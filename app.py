@@ -149,7 +149,7 @@ async def fetchSubUrl(jwt: str) -> str:
     async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), follow_redirects=True) as client:
         response = await client.get('https://hi.hanamaki.dev/public/api/v1/user/getSubscribe', headers={'Authorization': jwt})
         response.raise_for_status()
-        sub_url = response.json().get('subscribe_url', None)
+        sub_url = response.json().get('data', {}).get('subscribe_url', None)
         if sub_url is None:
             raise ValueError('订阅链接不存在')
         return sub_url
