@@ -467,6 +467,10 @@ class BetterPixiv:
     async def bookmark_illust(self, illust_id: int):
         assert self.api
         return await self.api.illust_bookmark_add(illust_id)
+    
+    async def unbookmark_illust(self, illust_id: int):
+        assert self.api
+        return await self.api.illust_bookmark_delete(illust_id)
 
 
 if __name__ == '__main__':
