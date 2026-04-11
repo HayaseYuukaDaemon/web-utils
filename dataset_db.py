@@ -368,6 +368,65 @@ class DatasetDB:
             print(f"查询图片失败: {e}")
             return None
 
+    def get_recommendation_viewed_pids(self, limit: int) -> list[int]:
+        """
+        获取用于 Pixiv 推荐去重的 viewed pid 列表。
+
+        以当前最早的待评分图片作为锚点，向更早的已抓取记录回看，
+        取最近的 limit 个不同作品 pid；若当前没有 wait 图片，则退化为
+        从全库最近记录中取 limit 个不同 pid。
+        """
+        if limit <= 0:
+            return []
+
+        try:
+            with self.get_connection() as conn:
+                first_wait = conn.execute(
+                    """
+                    SELECT fetched_at, page_index
+                    FROM images
+                    WHERE status = 'wait' AND score IS NULL
+                    ORDER BY fetched_at ASC, page_index ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
+
+                if first_wait is None:
+                    cursor = conn.execute(
+                        """
+                        SELECT pid
+                        FROM images
+                        ORDER BY fetched_at DESC, page_index DESC
+                        """
+                    )
+                else:
+                    cursor = conn.execute(
+                        """
+                        SELECT pid
+                        FROM images
+                        WHERE fetched_at < ?
+                           OR (fetched_at = ? AND page_index < ?)
+                        ORDER BY fetched_at DESC, page_index DESC
+                        """,
+                        (first_wait["fetched_at"], first_wait["fetched_at"], first_wait["page_index"])
+                    )
+
+                viewed_pids: list[int] = []
+                seen_pids: set[int] = set()
+                for row in cursor.fetchall():
+                    pid = int(row["pid"])
+                    if pid in seen_pids:
+                        continue
+                    seen_pids.add(pid)
+                    viewed_pids.append(pid)
+                    if len(viewed_pids) >= limit:
+                        break
+
+                return viewed_pids
+        except Exception as e:
+            print(f"获取推荐 viewed 列表失败: {e}")
+            return []
+
     def get_images_by_pid(self, pid: int) -> list[dict]:
         """
         获取某个作品的所有图片

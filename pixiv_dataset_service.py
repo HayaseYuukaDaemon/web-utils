@@ -44,6 +44,10 @@ class PixivDatasetService:
         self.mock_mode = mock_mode
         self.counts_config = counts_config or {}
 
+    def get_fetch_count(self) -> int:
+        """返回当前模式下单次补图批次使用的抓取数量。"""
+        return 10 if self.mock_mode else self.counts_config.get('fetch_count', 50)
+
     def create_pixiv_client(self) -> BetterPixiv:
         """创建一个新的 BetterPixiv 上下文实例。"""
         return BetterPixiv(
@@ -108,10 +112,15 @@ class PixivDatasetService:
     ) -> list[WorkDetail]:
         """在已建立的 Pixiv 会话内拉取推荐作品。"""
         works = []
+        viewed_limit = self.get_fetch_count()
+        viewed_pids = self.db.get_recommendation_viewed_pids(viewed_limit)
+        self.logger.info(
+            f'[拉取] 从数据库生成 viewed 列表: limit={viewed_limit}, size={len(viewed_pids)}'
+        )
 
         while len(works) < count:
             self.logger.debug(f'[拉取] 当前已拉取 {len(works)} 份，继续拉取...')
-            batch = await pixiv.get_recommended_illusts()
+            batch = await pixiv.get_recommended_illusts(viewed=viewed_pids or None)
 
             if not batch:
                 self.logger.warning('[拉取] 没有更多推荐作品')
@@ -123,6 +132,11 @@ class PixivDatasetService:
                     f'[拉取] 本批次返回 {len(batch)} 份作品，超过剩余需求 {remaining}，将截断到目标数量'
                 )
                 batch = batch[:remaining]
+
+            # 下一轮继续补图时，把本轮已拿到的作品作为最新 viewed 上报，
+            # 避免在同一维护批次内重复拿到相同推荐。
+            current_batch_pids = [work.id for work in batch]
+            viewed_pids = list(dict.fromkeys(current_batch_pids + viewed_pids))[:viewed_limit]
 
             self.logger.debug(f'[拉取] 本批次获取到 {len(batch)} 份作品')
             for work in batch:
@@ -371,7 +385,7 @@ class PixivDatasetService:
         }
 
         # 根据 mock_mode 决定拉取数量
-        fetch_count = 10 if self.mock_mode else self.counts_config.get('fetch_count', 50)
+        fetch_count = self.get_fetch_count()
         self.logger.info(f'[自动维护] 当前模式: {"测试模式" if self.mock_mode else "生产模式"}，拉取数量: {fetch_count}')
 
         # 1. 确保待评分图片充足
