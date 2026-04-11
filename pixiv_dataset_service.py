@@ -53,8 +53,12 @@ class PixivDatasetService:
         )
 
     def enqueue_bookmark_job(self, pid: int) -> bool:
-        """把作品加入异步收藏队列。"""
+        """把作品加入“加入收藏”异步队列。"""
         return self.db.enqueue_bookmark_job(pid)
+
+    def enqueue_unbookmark_job(self, pid: int) -> bool:
+        """把作品加入“取消收藏”异步队列。"""
+        return self.db.enqueue_unbookmark_job(pid)
 
     @classmethod
     def from_config(cls, config_path: str = "pixiv_config.yaml"):
@@ -113,12 +117,22 @@ class PixivDatasetService:
                 self.logger.warning('[拉取] 没有更多推荐作品')
                 break
 
+            remaining = count - len(works)
+            if len(batch) > remaining:
+                self.logger.info(
+                    f'[拉取] 本批次返回 {len(batch)} 份作品，超过剩余需求 {remaining}，将截断到目标数量'
+                )
+                batch = batch[:remaining]
+
             self.logger.debug(f'[拉取] 本批次获取到 {len(batch)} 份作品')
             for work in batch:
                 self.logger.debug(f'[拉取] 作品: pid={work.id}, title={work.title}, pages={work.page_count}')
 
             works.extend(batch)
             self.logger.info(f'[拉取] 已拉取 {len(works)} 份作品')
+
+            if len(works) >= count:
+                break
 
             # 避免请求过快
             await asyncio.sleep(1)
@@ -239,6 +253,7 @@ class PixivDatasetService:
         result = {
             'queued_jobs': len(jobs),
             'bookmarked_works': 0,
+            'unbookmarked_works': 0,
             'failed_jobs': 0,
         }
         if not jobs:
@@ -249,17 +264,23 @@ class PixivDatasetService:
 
         for job in jobs:
             pid = job['pid']
+            action = job.get('action', 'bookmark')
             try:
-                await pixiv.bookmark_illust(pid)
+                if action == 'unbookmark':
+                    await pixiv.unbookmark_illust(pid)
+                    result['unbookmarked_works'] += 1
+                    self.logger.info(f'[收藏任务] 取消收藏成功: pid={pid}')
+                else:
+                    await pixiv.bookmark_illust(pid)
+                    result['bookmarked_works'] += 1
+                    self.logger.info(f'[收藏任务] 收藏成功: pid={pid}')
                 self.db.mark_bookmark_job_done(pid)
-                result['bookmarked_works'] += 1
-                self.logger.info(f'[收藏任务] 收藏成功: pid={pid}')
             except Exception as e:
                 delay_seconds = self.get_bookmark_retry_delay_seconds(job['attempts'])
                 self.db.mark_bookmark_job_retry(pid, delay_seconds, str(e))
                 result['failed_jobs'] += 1
                 self.logger.warning(
-                    f'[收藏任务] 收藏失败: pid={pid}, '
+                    f'[收藏任务] {action} 失败: pid={pid}, '
                     f'下次重试 {delay_seconds}s 后, error={e}'
                 )
 
@@ -285,6 +306,7 @@ class PixivDatasetService:
             'pending_jobs_before': pending_count,
             'queued_jobs': 0,
             'bookmarked_works': 0,
+            'unbookmarked_works': 0,
             'failed_jobs': 0,
             'batches': 0,
         }
@@ -302,6 +324,7 @@ class PixivDatasetService:
                 result['batches'] += 1
                 result['queued_jobs'] += queued_jobs
                 result['bookmarked_works'] += batch_result['bookmarked_works']
+                result['unbookmarked_works'] += batch_result['unbookmarked_works']
                 result['failed_jobs'] += batch_result['failed_jobs']
 
                 if queued_jobs < batch_size:
@@ -320,48 +343,14 @@ class PixivDatasetService:
         stats = self.db.get_stats()
         return stats.get('wait_count', 0)
 
-    def cleanup_done_images(self, keep_count: int) -> int:
-        """
-        清理已评分图片（LRU 策略）
-
-        保留最近 keep_count 张已评分图片，删除更旧的
-
-        Args:
-            keep_count: 保留的图片数量
-
-        Returns:
-            删除的图片数量
-        """
-        self.logger.info(f'开始清理已评分图片状态，保留最近 {keep_count} 张')
-
-        # 获取需要删除的图片
-        to_delete = self.db.get_images_to_cleanup(keep_count)
-
-        if not to_delete:
-            self.logger.info('没有需要清理的图片')
-            return 0
-
-        deleted_count = 0
-        for image in to_delete:
-            try:
-                # 不再落盘图片，只切换数据库状态以压缩活跃评分集合。
-                self.db.update_status(image['pid'], image['page_index'], 'deleted')
-                deleted_count += 1
-            except Exception as e:
-                self.logger.error(f'更新图片状态失败: pid={image["pid"]}, page={image["page_index"]}, 错误: {e}')
-
-        self.logger.info(f'清理完成，删除了 {deleted_count} 张图片')
-        return deleted_count
-
-    async def auto_maintenance(self, min_wait: int | None = None, max_done: int | None = None) -> dict:
+    async def auto_maintenance(self, min_wait: int | None = None) -> dict:
         """
         自动维护任务
 
-        确保待评分图片 >= min_wait，已评分图片 <= max_done
+        确保待评分图片 >= min_wait
 
         Args:
             min_wait: 最小待评分图片数量
-            max_done: 最大已评分图片数量
 
         Returns:
             维护结果统计
@@ -370,16 +359,13 @@ class PixivDatasetService:
         if min_wait is None:
             min_wait = self.counts_config.get('min_wait', 20)
             self.logger.info(f'[自动维护] 默认或从配置文件加载 {min_wait=}')
-        if max_done is None:
-            max_done = self.counts_config.get('max_done', 100)
-            self.logger.info(f'[自动维护] 默认或从配置文件加载 {max_done=}')
         result = {
             'fetched_works': 0,
             'fetched_images': 0,
-            'deleted_images': 0,
             'bookmark_jobs': {
                 'queued_jobs': 0,
                 'bookmarked_works': 0,
+                'unbookmarked_works': 0,
                 'failed_jobs': 0,
             }
         }
@@ -402,21 +388,6 @@ class PixivDatasetService:
             self.logger.info(f'[自动维护] 拉取完成: {result["fetched_works"]} 份作品，{result["fetched_images"]} 张图片')
         else:
             self.logger.info(f'[自动维护] 待评分图片充足，跳过收藏任务处理和拉取')
-
-        # 2. 清理已评分图片
-        stats = self.db.get_stats()
-        done_count = stats.get('done_count', 0)
-        self.logger.info(f'[自动维护] 当前已评分图片: {done_count} 张')
-
-        keep_count = self.counts_config.get('keep_count', 50)
-
-        if done_count > max_done:
-            self.logger.info(f'[自动维护] 已评分图片过多，开始清理（保留最近 {keep_count} 张）')
-            deleted = self.cleanup_done_images(keep_count)
-            result['deleted_images'] = deleted
-            self.logger.info(f'[自动维护] 清理完成: 删除了 {deleted} 张图片')
-        else:
-            self.logger.info(f'[自动维护] 已评分图片数量合理，无需清理')
 
         self.logger.info(f'[自动维护] 维护任务完成: {result}')
         return result

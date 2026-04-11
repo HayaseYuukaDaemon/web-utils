@@ -192,6 +192,13 @@ async def judge_image(request: JudgeRequest, background_tasks: BackgroundTasks):
     if request.score not in (0, 1, 2, 3):
         raise HTTPException(status_code=400, detail="评分必须是 0-3")
 
+    current_image = db.get_image_by_pid_page(request.pid, request.page_index)
+    if not current_image:
+        raise HTTPException(status_code=404, detail="图片不存在")
+
+    previous_images = db.get_images_by_pid(request.pid)
+    previously_bookmarked = any((image.get('score') or -1) >= 2 for image in previous_images)
+
     # 评分
     success = db.judge_image(request.pid, request.page_index, request.score)
     if not success:
@@ -201,12 +208,27 @@ async def judge_image(request: JudgeRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(run_maintenance_task)
     logger.info(f"[Judge] 评分成功: pid={request.pid}, page={request.page_index}, score={request.score}")
 
-    if request.score > 1 and dataset_service:
-        queued = dataset_service.enqueue_bookmark_job(request.pid)
-        if queued:
-            logger.info(f'[Judge] score >= 2，已加入收藏队列: pid={request.pid}')
+    if dataset_service:
+        updated_images = db.get_images_by_pid(request.pid)
+        should_be_bookmarked = any((image.get('score') or -1) >= 2 for image in updated_images)
+
+        if not previously_bookmarked and should_be_bookmarked:
+            queued = dataset_service.enqueue_bookmark_job(request.pid)
+            if queued:
+                logger.info(f'[Judge] 作品从非收藏态变为收藏态，已加入收藏队列: pid={request.pid}')
+            else:
+                logger.warning(f'[Judge] 作品需要加入收藏，但入队失败: pid={request.pid}')
+        elif previously_bookmarked and not should_be_bookmarked:
+            queued = dataset_service.enqueue_unbookmark_job(request.pid)
+            if queued:
+                logger.info(f'[Judge] 作品从收藏态变为非收藏态，已加入取消收藏队列: pid={request.pid}')
+            else:
+                logger.warning(f'[Judge] 作品需要取消收藏，但入队失败: pid={request.pid}')
         else:
-            logger.warning(f'[Judge] score >= 2，但加入收藏队列失败: pid={request.pid}')
+            logger.info(
+                f'[Judge] 作品收藏目标未变化，跳过收藏队列: '
+                f'pid={request.pid}, previous_score={current_image["score"]}, new_score={request.score}'
+            )
 
     # 获取下一张待评分图片
     next_image = db.get_image_by_offset(0)

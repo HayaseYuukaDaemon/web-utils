@@ -85,6 +85,7 @@ class DatasetDB:
                 """
                 CREATE TABLE IF NOT EXISTS bookmark_jobs (
                     pid INTEGER PRIMARY KEY,
+                    action TEXT NOT NULL DEFAULT 'bookmark' CHECK(action IN ('bookmark', 'unbookmark')),
                     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'done')),
                     attempts INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
@@ -100,6 +101,15 @@ class DatasetDB:
                 ON bookmark_jobs(status, next_retry_at, created_at)
                 """
             )
+
+            bookmark_job_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(bookmark_jobs)").fetchall()
+            }
+            if "action" not in bookmark_job_columns:
+                conn.execute(
+                    "ALTER TABLE bookmark_jobs ADD COLUMN action TEXT NOT NULL DEFAULT 'bookmark'"
+                )
 
     def add_image(self, pid: int, page_index: int, local_filename: str,
                   source_image_url: str,
@@ -459,38 +469,28 @@ class DatasetDB:
             print(f"导出训练数据失败: {e}")
             return []
 
-    def get_images_to_cleanup(self, keep_count: int = 100) -> list[dict]:
-        """
-        获取需要清理的已评分图片（保留最近 keep_count 张）
-
-        Args:
-            keep_count: 保留的图片数量
-
-        Returns:
-            list[dict]: 需要清理的图片列表
-        """
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.execute(
-                    """
-                    SELECT * FROM images
-                    WHERE status = 'done'
-                    ORDER BY judged_at ASC
-                    LIMIT MAX(0, (SELECT COUNT(*) FROM images WHERE status = 'done') - ?)
-                    """,
-                    (keep_count,)
-                )
-                return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            print(f"获取待清理图片失败: {e}")
-            return []
-
     def enqueue_bookmark_job(self, pid: int) -> bool:
+        """
+        为作品加入“加入收藏”任务队列。
+        """
+        return self._enqueue_bookmark_job(pid, 'bookmark')
+
+    def enqueue_unbookmark_job(self, pid: int) -> bool:
+        """
+        为作品加入“取消收藏”任务队列。
+        """
+        return self._enqueue_bookmark_job(pid, 'unbookmark')
+
+    def _enqueue_bookmark_job(self, pid: int, action: str) -> bool:
         """
         为作品加入收藏任务队列。
 
-        已完成的任务不会重复入队；未完成任务会被刷新为 pending。
+        同一个作品始终只保留一条最新期望动作的任务。
         """
+        if action not in ('bookmark', 'unbookmark'):
+            print(f"加入收藏队列失败: 不支持的动作 {action}")
+            return False
+
         now = datetime.now().isoformat()
 
         try:
@@ -498,38 +498,27 @@ class DatasetDB:
                 conn.execute(
                     """
                     INSERT INTO bookmark_jobs (
-                        pid, status, attempts, created_at, updated_at, next_retry_at, last_error
+                        pid, action, status, attempts, created_at, updated_at, next_retry_at, last_error
                     )
-                    VALUES (?, 'pending', 0, ?, ?, ?, NULL)
+                    VALUES (?, ?, 'pending', 0, ?, ?, ?, NULL)
                     ON CONFLICT(pid) DO UPDATE SET
-                        status = CASE
-                            WHEN bookmark_jobs.status = 'done' THEN 'done'
-                            ELSE 'pending'
-                        END,
-                        attempts = CASE
-                            WHEN bookmark_jobs.status = 'done' THEN bookmark_jobs.attempts
-                            ELSE 0
-                        END,
+                        action = excluded.action,
+                        status = 'pending',
+                        attempts = 0,
                         updated_at = excluded.updated_at,
-                        next_retry_at = CASE
-                            WHEN bookmark_jobs.status = 'done' THEN bookmark_jobs.next_retry_at
-                            ELSE excluded.next_retry_at
-                        END,
-                        last_error = CASE
-                            WHEN bookmark_jobs.status = 'done' THEN bookmark_jobs.last_error
-                            ELSE NULL
-                        END
+                        next_retry_at = excluded.next_retry_at,
+                        last_error = NULL
                     """,
-                    (pid, now, now, now)
+                    (pid, action, now, now, now)
                 )
-            print(f"加入收藏队列成功: pid={pid}")
+            print(f"加入收藏队列成功: pid={pid}, action={action}")
             return True
         except Exception as e:
             print(f"加入收藏队列失败: {e}")
             return False
 
     def get_pending_bookmark_jobs(self, limit: int = 20) -> list[dict]:
-        """获取当前可执行的收藏任务。"""
+        """获取当前可执行的收藏/取消收藏任务。"""
         now = datetime.now().isoformat()
 
         try:

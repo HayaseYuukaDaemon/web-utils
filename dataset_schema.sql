@@ -95,6 +95,7 @@ CREATE INDEX idx_fetched_page ON images(fetched_at, page_index);
 
 CREATE TABLE bookmark_jobs (
     pid INTEGER PRIMARY KEY,
+    action TEXT NOT NULL DEFAULT 'bookmark' CHECK(action IN ('bookmark', 'unbookmark')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'done')),
     attempts INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,

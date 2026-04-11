@@ -23,7 +23,7 @@
 | 1 | 中性 | NEUTRAL |
 | 0 | 讨厌 | HATE |
 
-> **自动收藏**：评分 >= 2（LIKE 或 LOVE）时会把作品加入异步收藏队列；收藏任务会在“待评分不足、触发补图批次”时集中执行，也会在应用优雅退出时尽量冲刷。
+> **自动收藏同步**：作品只要存在任意一张图片评分 >= 2（LIKE 或 LOVE），就会进入异步收藏队列；当该作品所有图片评分都降到 0/1 时，会进入异步取消收藏队列。两类任务都会在“待评分不足、触发补图批次”时集中执行，也会在应用优雅退出时尽量冲刷。
 
 ---
 
@@ -45,7 +45,7 @@
 │                              │ 执行维护任务           │   │
 │                              │ - 低水位时处理收藏队列 │   │
 │                              │ - 检查并拉取新作品    │   │
-│                              │ - 清理旧已评分图片    │   │
+│                              │ - 批处理收藏/取消收藏 │   │
 │                              └──────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
            │
@@ -88,10 +88,9 @@
    - 设置 `score` 字段（0-3）
    - 设置 `judged_at` 时间戳
    - 更新 `status` 为 `done`
-6. 如果 `score >= 2`，将作品加入异步收藏队列
+6. 根据该作品当前所有图片的评分状态，必要时将作品加入异步收藏/取消收藏队列
 7. **后台执行维护任务**：
-   - 若待评分图片不足，则在同一个 Pixiv 会话内先批量处理 bookmark 队列，再拉取新作品
-   - 清理已评分图片（触发条件：`done_count > max_done`）
+   - 若待评分图片不足，则在同一个 Pixiv 会话内先批量处理 bookmark / unbookmark 队列，再拉取新作品
 
 ### 3. 存储管理
 
@@ -102,8 +101,8 @@
 
 **活跃集合管理策略**：
 - 待评分图片（`status='wait'`）：保持 `min_wait` 张以上（默认 20 张，Mock 模式 20 张）
-- 已评分图片（`status='done'`）：上限 `max_done` 张（默认 100 张）
-- 已清理图片（`status='deleted'`）：仅表示移出活跃评分集合，数据库记录仍保留
+- 已评分图片（`status='done'`）：持续保留，不再做自动清理
+- 已清理图片（`status='deleted'`）：仅保留对旧数据的兼容含义，当前逻辑不再主动写入
 
 ### 4. 评分后的自动维护
 
@@ -121,21 +120,15 @@ if wait_count < min_wait:
         fetch_and_store_with_client(pixiv, fetch_count)
 ```
 
-**4.2 清理已评分图片（LRU 策略）**
+**4.2 收藏队列的目标态同步**
 ```python
-done_count = COUNT(*) WHERE status='done'
-max_done = counts_config.get('max_done', 100)
-keep_count = counts_config.get('keep_count', 50)
+previously_bookmarked = any(score >= 2 for score in work_scores_before)
+should_be_bookmarked = any(score >= 2 for score in work_scores_after)
 
-if done_count > max_done:
-    # 获取需要删除的图片（按 judged_at 升序，保留最近 keep_count 张）
-    to_delete = SELECT * FROM images
-                WHERE status='done'
-                ORDER BY judged_at ASC
-                LIMIT (done_count - keep_count)
-
-    for image in to_delete:
-        UPDATE images SET status='deleted' WHERE id=image.id
+if not previously_bookmarked and should_be_bookmarked:
+    enqueue_bookmark_job(pid)
+elif previously_bookmarked and not should_be_bookmarked:
+    enqueue_unbookmark_job(pid)
 ```
 
 ---
@@ -437,11 +430,9 @@ db_path: "dataset.db"
 # 维护任务数量配置（counts_config）
 counts_config:
   min_wait: 20       # 待评分图片不足时触发拉取的下限
-  max_done: 100     # 已评分图片上限，超出时触发清理
-  keep_count: 50    # 清理时保留的最近已评分图片数量
   fetch_count: 50   # 生产模式每次拉取的作品数量（Mock 模式固定为 10）
-  bookmark_batch_size: 10           # 补图批次里单次最多处理多少个 bookmark job
-  bookmark_shutdown_batch_size: 50  # 应用退出前冲刷 bookmark 队列时的批大小
+  bookmark_batch_size: 10           # 补图批次里单次最多处理多少个收藏任务
+  bookmark_shutdown_batch_size: 50  # 应用退出前冲刷收藏任务队列时的批大小
 ```
 
 ### 各参数含义
@@ -449,11 +440,9 @@ counts_config:
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `min_wait` | 20 | 待评分图片数量低于此值时，自动拉取新作品 |
-| `max_done` | 100 | 已评分图片数量高于此值时，自动清理旧图片 |
-| `keep_count` | 50 | 清理时保留的最近已评分图片数量 |
 | `fetch_count` | 50 | 生产模式每次拉取的作品数量（Mock 模式固定为 10） |
-| `bookmark_batch_size` | 10 | 补图批次里单次处理的 bookmark job 上限 |
-| `bookmark_shutdown_batch_size` | 50 | 应用退出前冲刷 bookmark 队列时的批大小 |
+| `bookmark_batch_size` | 10 | 补图批次里单次处理的收藏/取消收藏任务上限 |
+| `bookmark_shutdown_batch_size` | 50 | 应用退出前冲刷收藏任务队列时的批大小 |
 
 ---
 
@@ -476,15 +465,17 @@ background_tasks.add_task(run_maintenance_task)
 
 ### 2. 自动收藏
 
-评分 >= 2（LIKE 或 LOVE）时，先把作品加入异步收藏队列：
+当作品的“是否应被收藏”目标态发生变化时，会把作品加入异步收藏队列：
 ```python
-if request.score > 1 and dataset_service:
+if not previously_bookmarked and should_be_bookmarked:
     dataset_service.enqueue_bookmark_job(request.pid)
+elif previously_bookmarked and not should_be_bookmarked:
+    dataset_service.enqueue_unbookmark_job(request.pid)
 ```
 
 当 `wait_count < min_wait`、系统进入补图批次时，后台维护任务会先批量消费这些 job，再在同一个 Pixiv 会话内拉取推荐作品，避免每次评分都单独登录一次 Pixiv。
 
-另外，应用优雅退出时也会尽量冲刷当前可执行的 bookmark 队列。
+另外，应用优雅退出时也会尽量冲刷当前可执行的收藏任务队列。
 
 ### 3. 图片访问策略
 

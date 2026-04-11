@@ -22,17 +22,11 @@ counts_config:
   # 待评分图片数量低于此值时，维护任务会进入“补图批次”
   min_wait: 20
 
-  # 已评分图片数量高于此值时，维护任务会把更旧的记录标为 deleted
-  max_done: 100
-
-  # 清理时保留最近 keep_count 张 done 图片
-  keep_count: 50
-
   # 生产模式每次补图批次拉取的作品数量
   fetch_count: 50
 
-  # 补图批次里单次最多处理多少个 bookmark job
+  # 补图批次里单次最多处理多少个收藏/取消收藏任务
   bookmark_batch_size: 10
 
-  # 应用退出前冲刷 bookmark 队列时的批大小
+  # 应用退出前冲刷收藏任务队列时的批大小
   bookmark_shutdown_batch_size: 50
