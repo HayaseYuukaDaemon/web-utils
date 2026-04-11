@@ -10,8 +10,7 @@ import pydantic
 from dataclasses import field
 import httpx
 
-app_kwargs = {"docs_url": None, "redoc_url": None, "openapi_url": None}
-app = fastapi.FastAPI(**app_kwargs)
+app = fastapi.FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 logger = get_logger('Site')
 app.mount("/src", StaticFiles(directory="src"), name="src")
 
@@ -117,8 +116,12 @@ def processCNAProxy(origin_content_str: str) -> str:
     proxy_dict['rules'] = list(filter(lambda r: r.split(',')[-1] not in diminish_proxy_groups, proxy_dict['rules']))
 
     select_proxy_group = next((item for item in proxy_dict['proxy-groups'] if '节点选择' in item["name"]), None)
+    if select_proxy_group is None:
+        logger.warning('未找到节点选择分组，无法处理订阅')
+        return origin_content_str
     china_proxy_group = next((item for item in proxy_dict['proxy-groups'] if '中国大陆' in item["name"]), None)
-    china_proxy_group['proxies'].insert(1, '🚀 节点选择')
+    if china_proxy_group:
+        china_proxy_group['proxies'].insert(1, '🚀 节点选择')
     select_proxy_group_proxies = select_proxy_group['proxies']
     only_foreign_proxies = []
     into_foreign_region = False
@@ -142,17 +145,42 @@ def processCNAProxy(origin_content_str: str) -> str:
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
 
 
+async def handleCNAProxy(jwt: str) -> str:
+    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT)) as client:
+        response = await client.get('https://hi.hanamaki.dev/public/api/v1/user/getSubscribe', headers={'Authorization': jwt})
+        response.raise_for_status()
+        sub_url = response.json().get('subscribe_url', None)
+        if sub_url is None:
+            raise ValueError('订阅链接不存在')
+        return sub_url
+
+
 @proxy_router.get('/sub',
                   name='proxy.get.sub',
                   dependencies=[fastapi.Depends(Authoricator([UserAbilities.PROXY_READ]))])
 async def handleSubProxies(sub_name: str = '', sub_config: str = ''):
-    proxy_filename = Path('proxy_url')
     if sub_name:
-        proxy_filename = Path(f'{sub_name}_{proxy_filename}')
-    if not proxy_filename.exists():
-        logger.warning(f"Proxy configuration error: {proxy_filename} not found.")
-        raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR)
-    upstream_content = await fetchProxy(proxy_filename.read_text().strip())
+        proxy_filename = Path(f'{sub_name}_proxy_url')
+        if not proxy_filename.exists():
+            logger.warning(f"Proxy configuration error: {proxy_filename} not found.")
+            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Proxy configuration file not found')
+        upstream_content = await fetchProxy(proxy_filename.read_text().strip())
+    else:
+        jwt_filename = Path('jwt_token')
+        if not jwt_filename.exists():
+            logger.warning(f"JWT token file not found: {jwt_filename}")
+            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR, detail='JWT token file is missing')
+        jwt_token = jwt_filename.read_text().strip()
+        if not jwt_token:
+            logger.warning("JWT token is empty")
+            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR, detail='JWT token is empty')
+        try:
+            sub_url = await handleCNAProxy(jwt_token)
+        except Exception as e:
+            logger.exception("Failed to get subscription URL", exc_info=e)
+            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                        detail='获取订阅链接失败')
+        upstream_content = await fetchProxy(sub_url)
     if upstream_content is None:
         raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
                                     detail='详情见服务器log')
@@ -168,7 +196,7 @@ async def handleSubProxies(sub_name: str = '', sub_config: str = ''):
 async def handleProxy():
     if not CUSTOM_CONFIG_FILE.exists():
         logger.warning(f'自定义配置文件缺失, 请求无效')
-        raise fastapi.HTTPException(status_code=fastapi.status.HTTP_404_NOT_FOUND)
+        raise fastapi.HTTPException(status_code=fastapi.status.HTTP_404_NOT_FOUND, detail='自定义配置文件缺失')
     return fastapi.Response(CUSTOM_CONFIG_FILE.read_text(), media_type='application/x-yaml')
 
 
