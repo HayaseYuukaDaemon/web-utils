@@ -145,8 +145,8 @@ def processCNAProxy(origin_content_str: str) -> str:
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
 
 
-async def handleCNAProxy(jwt: str) -> str:
-    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT)) as client:
+async def fetchSubUrl(jwt: str) -> str:
+    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), follow_redirects=True) as client:
         response = await client.get('https://hi.hanamaki.dev/public/api/v1/user/getSubscribe', headers={'Authorization': jwt})
         response.raise_for_status()
         sub_url = response.json().get('subscribe_url', None)
@@ -175,7 +175,7 @@ async def handleSubProxies(sub_name: str = '', sub_config: str = ''):
             logger.warning("JWT token is empty")
             raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR, detail='JWT token is empty')
         try:
-            sub_url = await handleCNAProxy(jwt_token)
+            sub_url = await fetchSubUrl(jwt_token)
         except Exception as e:
             logger.exception("Failed to get subscription URL", exc_info=e)
             raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
