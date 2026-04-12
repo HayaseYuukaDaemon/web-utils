@@ -182,10 +182,11 @@ function renderConfigSuggestions(keyword = '', forceShow = false) {
         CONFIG_SUGGESTIONS_DOM.appendChild(emptyState);
     } else {
         suggestions.forEach(([name, config], index) => {
-            const optionButton = document.createElement('button');
-            optionButton.type = 'button';
+            const optionButton = document.createElement('div');
             optionButton.className = 'autocomplete-item';
             optionButton.dataset.aliasName = name;
+            optionButton.tabIndex = 0;
+            optionButton.setAttribute('role', 'button');
             const titleSpan = document.createElement('span');
             titleSpan.className = 'autocomplete-title';
             titleSpan.textContent = name;
@@ -194,8 +195,7 @@ function renderConfigSuggestions(keyword = '', forceShow = false) {
             metaSpan.textContent = config.platform || '';
             optionButton.appendChild(titleSpan);
             optionButton.appendChild(metaSpan);
-            optionButton.addEventListener('mousedown', event => {
-                event.preventDefault();
+            optionButton.addEventListener('click', () => {
                 applyConfigSelection(name);
             });
             optionButton.addEventListener('mouseenter', () => {
