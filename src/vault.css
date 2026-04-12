@@ -40,6 +40,64 @@ h2 {
     position: relative;
 }
 
+.autocomplete-shell {
+    position: relative;
+    min-width: 0;
+}
+
+.autocomplete-list {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    max-height: 220px;
+    overflow-y: auto;
+    background: #181818;
+    border: 1px solid #3f3f3f;
+    border-radius: 8px;
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.45);
+    z-index: 20;
+}
+
+.autocomplete-item {
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+    margin: 0;
+    padding: 10px 12px;
+    background: transparent;
+    color: #fff;
+    text-align: left;
+    font-size: 0.95rem;
+}
+
+.autocomplete-item + .autocomplete-item {
+    border-top: 1px solid #2c2c2c;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.active {
+    background: #214734;
+}
+
+.autocomplete-title {
+    display: block;
+    font-weight: bold;
+}
+
+.autocomplete-meta {
+    display: block;
+    margin-top: 4px;
+    color: #9bb8a7;
+    font-size: 0.8rem;
+}
+
+.autocomplete-empty {
+    padding: 10px 12px;
+    color: #8a8a8a;
+    font-size: 0.85rem;
+}
+
 label {
     display: block;
     font-size: 0.8rem;
@@ -155,4 +213,9 @@ body.offline-mode::after { bottom: 0; }
 /* 避免内容被顶部警示条遮挡 */
 body.offline-mode .container {
     margin-top: 50px;
+}
+
+.autocomplete-item,
+.autocomplete-item:hover {
+    cursor: pointer;
 }

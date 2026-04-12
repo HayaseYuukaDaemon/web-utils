@@ -22,8 +22,6 @@
     <div class="group">
         <label>PLATFORM</label>
         <input type="text" id="site" placeholder="e.g. Google">
-        <datalist id="aliases">
-        </datalist>
     </div>
 
     <div class="group" style="display:flex; gap:10px;">
@@ -41,8 +39,11 @@
     </div>
     <div class="group" style="border-top: 1px dashed #ccc; padding-top: 15px; margin-top: 15px;">
         <label>CONFIGURATION MANAGE</label>
-        <div style="display:flex; gap:10px;">
-            <input type="text" id="config-name" placeholder="Alias Key (e.g. My Google)" list="aliases" style="flex:2;">
+        <div style="display:flex; gap:10px; align-items:flex-start;">
+            <div class="autocomplete-shell" style="flex:2;">
+                <input type="text" id="config-name" placeholder="Alias Key (e.g. My Google)" autocomplete="off" autocapitalize="off" spellcheck="false">
+                <div id="config-suggestions" class="autocomplete-list" hidden></div>
+            </div>
             <button style="flex:1; background-color: green;" id="config-save-btn">Save</button>
             <button style="flex:1; background-color: red;" id="config-del-btn">Del</button>
         </div>

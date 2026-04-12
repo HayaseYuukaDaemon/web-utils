@@ -17,6 +17,9 @@ const PAGE_AUTH_TOKEN = PAGE_URL.searchParams.get('auth_token');
 const MAIN_INPUT_DOM = document.getElementById('mk');
 const FP_BADGE_DOM = document.getElementById('mk-fingerprint'); // 修正变量名拼写 Badget -> Badge
 const TOAST_DOM = document.getElementById('toast');
+const CONFIG_NAME_INPUT_DOM = document.getElementById('config-name');
+const CONFIG_SUGGESTIONS_DOM = document.getElementById('config-suggestions');
+let ACTIVE_SUGGESTION_INDEX = -1;
 
 // 1. Master Key 指纹逻辑
 MAIN_INPUT_DOM.addEventListener('input', async e => {
@@ -70,7 +73,7 @@ async function fetchKeyConfigs(){
         }
         const remoteConfigs = await response.json();
         Object.assign(ALIAS_MAP, remoteConfigs);
-        updateDatalistUI();
+        refreshAliasSuggestions();
         console.log(`[Vault] Successfully loaded ${Object.keys(remoteConfigs).length} configs.`);
     } catch (error) {
         console.error('[Vault] Fetch configs failed:', error);
@@ -124,16 +127,91 @@ function activateOfflineMode(reason = 'Read-only') {
     OFFLINE_MODE = true;
 }
 
-function updateDatalistUI() {
-    const datalist = document.getElementById('aliases');
-    datalist.innerHTML = '';
-    const sortedKeys = Object.keys(ALIAS_MAP).sort();
-    sortedKeys.forEach(key => {
-        const config = ALIAS_MAP[key];
-        const option = document.createElement('option');
-        option.value = key;
-        option.label = `${config.platform}`; // 简化 label
-        datalist.appendChild(option);
+function refreshAliasSuggestions() {
+    if (document.activeElement === CONFIG_NAME_INPUT_DOM || !CONFIG_SUGGESTIONS_DOM.hidden) {
+        renderConfigSuggestions(CONFIG_NAME_INPUT_DOM.value, true);
+    }
+}
+
+function getAliasSuggestions(keyword = '') {
+    const normalizedKeyword = keyword.trim().toLowerCase();
+    const entries = Object.entries(ALIAS_MAP).sort(([left], [right]) => left.localeCompare(right));
+    if (!normalizedKeyword) {
+        return entries.slice(0, 8);
+    }
+    const startsWithMatches = [];
+    const includesMatches = [];
+    entries.forEach(([name, config]) => {
+        const haystacks = [name, config.platform || ''].map(text => text.toLowerCase());
+        if (haystacks.some(text => text.startsWith(normalizedKeyword))) {
+            startsWithMatches.push([name, config]);
+            return;
+        }
+        if (haystacks.some(text => text.includes(normalizedKeyword))) {
+            includesMatches.push([name, config]);
+        }
+    });
+    return startsWithMatches.concat(includesMatches).slice(0, 8);
+}
+
+function hideConfigSuggestions() {
+    CONFIG_SUGGESTIONS_DOM.hidden = true;
+    CONFIG_SUGGESTIONS_DOM.innerHTML = '';
+    ACTIVE_SUGGESTION_INDEX = -1;
+}
+
+function applyConfigSelection(name) {
+    CONFIG_NAME_INPUT_DOM.value = name;
+    CONFIG_NAME_INPUT_DOM.dispatchEvent(new Event('input', {bubbles: true}));
+    hideConfigSuggestions();
+}
+
+function renderConfigSuggestions(keyword = '', forceShow = false) {
+    const suggestions = getAliasSuggestions(keyword);
+    if (!forceShow && suggestions.length === 0) {
+        hideConfigSuggestions();
+        return;
+    }
+
+    CONFIG_SUGGESTIONS_DOM.innerHTML = '';
+    ACTIVE_SUGGESTION_INDEX = -1;
+    if (suggestions.length === 0) {
+        const emptyState = document.createElement('div');
+        emptyState.className = 'autocomplete-empty';
+        emptyState.innerText = 'No matching aliases';
+        CONFIG_SUGGESTIONS_DOM.appendChild(emptyState);
+    } else {
+        suggestions.forEach(([name, config], index) => {
+            const optionButton = document.createElement('button');
+            optionButton.type = 'button';
+            optionButton.className = 'autocomplete-item';
+            optionButton.dataset.aliasName = name;
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'autocomplete-title';
+            titleSpan.textContent = name;
+            const metaSpan = document.createElement('span');
+            metaSpan.className = 'autocomplete-meta';
+            metaSpan.textContent = config.platform || '';
+            optionButton.appendChild(titleSpan);
+            optionButton.appendChild(metaSpan);
+            optionButton.addEventListener('mousedown', event => {
+                event.preventDefault();
+                applyConfigSelection(name);
+            });
+            optionButton.addEventListener('mouseenter', () => {
+                ACTIVE_SUGGESTION_INDEX = index;
+                syncActiveSuggestion();
+            });
+            CONFIG_SUGGESTIONS_DOM.appendChild(optionButton);
+        });
+    }
+    CONFIG_SUGGESTIONS_DOM.hidden = false;
+}
+
+function syncActiveSuggestion() {
+    const items = CONFIG_SUGGESTIONS_DOM.querySelectorAll('.autocomplete-item');
+    items.forEach((item, index) => {
+        item.classList.toggle('active', index === ACTIVE_SUGGESTION_INDEX);
     });
 }
 
@@ -223,7 +301,7 @@ document.getElementById('config-save-btn').addEventListener('click', async ev =>
         return;
     }
     ALIAS_MAP[config.name] = config.key_config;
-    updateDatalistUI();
+    refreshAliasSuggestions();
     showToast(`Saved: ${config.name}`);
 });
 
@@ -247,7 +325,7 @@ document.getElementById('config-del-btn').addEventListener('click', async ev => 
             showToast(`Delete Error ${response.status}`, true);
         }
         delete ALIAS_MAP[name];
-        updateDatalistUI();
+        refreshAliasSuggestions();
         document.getElementById('config-name').value = '';
         // 触发 input 事件以重置下方 UI
         document.getElementById('config-name').dispatchEvent(new Event('input'));
@@ -258,7 +336,7 @@ document.getElementById('config-del-btn').addEventListener('click', async ev => 
 });
 
 // 6. 联动逻辑 (Auto-fill)
-document.getElementById('config-name').addEventListener('input', (e) => {
+CONFIG_NAME_INPUT_DOM.addEventListener('input', (e) => {
     const name = e.target.value;
     const config = ALIAS_MAP[name];
 
@@ -290,4 +368,51 @@ document.getElementById('config-name').addEventListener('input', (e) => {
             symInput.value = "";  // 恢复默认占位符状态
         }
     }
+    renderConfigSuggestions(name, document.activeElement === CONFIG_NAME_INPUT_DOM);
+});
+
+CONFIG_NAME_INPUT_DOM.addEventListener('focus', () => {
+    renderConfigSuggestions(CONFIG_NAME_INPUT_DOM.value, true);
+});
+
+CONFIG_NAME_INPUT_DOM.addEventListener('click', () => {
+    renderConfigSuggestions(CONFIG_NAME_INPUT_DOM.value, true);
+});
+
+CONFIG_NAME_INPUT_DOM.addEventListener('keydown', (event) => {
+    const items = CONFIG_SUGGESTIONS_DOM.querySelectorAll('.autocomplete-item');
+    if (CONFIG_SUGGESTIONS_DOM.hidden || items.length === 0) {
+        return;
+    }
+
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        ACTIVE_SUGGESTION_INDEX = (ACTIVE_SUGGESTION_INDEX + 1 + items.length) % items.length;
+        syncActiveSuggestion();
+        return;
+    }
+    if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        ACTIVE_SUGGESTION_INDEX = (ACTIVE_SUGGESTION_INDEX - 1 + items.length) % items.length;
+        syncActiveSuggestion();
+        return;
+    }
+    if (event.key === 'Enter' && ACTIVE_SUGGESTION_INDEX >= 0) {
+        event.preventDefault();
+        applyConfigSelection(items[ACTIVE_SUGGESTION_INDEX].dataset.aliasName || '');
+        return;
+    }
+    if (event.key === 'Escape') {
+        hideConfigSuggestions();
+    }
+});
+
+document.addEventListener('click', (event) => {
+    if (CONFIG_SUGGESTIONS_DOM.hidden) {
+        return;
+    }
+    if (event.target === CONFIG_NAME_INPUT_DOM || CONFIG_SUGGESTIONS_DOM.contains(event.target)) {
+        return;
+    }
+    hideConfigSuggestions();
 });
