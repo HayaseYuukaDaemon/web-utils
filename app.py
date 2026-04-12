@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 import yaml
 from fastapi.staticfiles import StaticFiles
-from site_utils import Authoricator, UserAbilities, get_logger
+from site_utils import Authoricator, UserAbilities, get_logger, get_file_hash
 import fastapi
 from fastapi import staticfiles
 import pydantic
@@ -237,6 +237,17 @@ app.include_router(clipboard_router)
 vault_router = fastapi.APIRouter(prefix='/vault', tags=['vault'])
 
 
+def render_html_with_versioned_assets(template_path: Path, asset_paths: list[str]) -> str:
+    html = template_path.read_text(encoding='utf-8')
+    for asset_path_str in asset_paths:
+        asset_path = Path(asset_path_str)
+        if not asset_path.exists():
+            continue
+        versioned_path = f'{asset_path_str}?v={get_file_hash(asset_path)}'
+        html = html.replace(asset_path_str, versioned_path)
+    return html
+
+
 class KeyConfig(pydantic.BaseModel):
     platform: str
     length: int
@@ -247,14 +258,20 @@ class KeyConfig(pydantic.BaseModel):
                   name='vault.show',
                   dependencies=[fastapi.Depends(Authoricator())])
 async def showVault():
-    return fastapi.responses.HTMLResponse(content=Path('templates/vault.html').read_text(encoding='utf-8'))
+    return fastapi.responses.HTMLResponse(content=render_html_with_versioned_assets(
+        Path('templates/vault.html'),
+        ['/src/vault.css', '/src/vault.js']
+    ))
 
 
 @vault_router.get('/list',
                   name='vault.list',
                   dependencies=[fastapi.Depends(Authoricator())])
 async def listVault():
-    return fastapi.responses.HTMLResponse(content=Path('templates/list_vaults.html').read_text(encoding='utf-8'))
+    return fastapi.responses.HTMLResponse(content=render_html_with_versioned_assets(
+        Path('templates/list_vaults.html'),
+        ['/src/vault.css']
+    ))
 
 
 @vault_router.get('/api/key_configs',
