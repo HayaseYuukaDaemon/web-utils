@@ -89,7 +89,7 @@
 <div class="container">
     <div class="header-actions">
         <h2>Config Registry</h2>
-        <a href="/vault" class="nav-link">← Back to Vault</a>
+        <a href="/vault" class="nav-link" id="back-to-vault">← Back to Vault</a>
     </div>
 
     <div id="status-msg" class="loading">Loading configurations...</div>
@@ -111,6 +111,23 @@
 
 <script>
     const CONFIG_API_ENDPOINT = '/vault/api/key_configs';
+    const PAGE_URL = new URL(window.location.href);
+    const PAGE_AUTH_TOKEN = PAGE_URL.searchParams.get('auth_token');
+
+    function withAuthFetchOptions(options = {}) {
+        const nextOptions = {...options};
+        const headers = new Headers(options.headers || {});
+        if (PAGE_AUTH_TOKEN && !headers.has('auth_token')) {
+            headers.set('auth_token', PAGE_AUTH_TOKEN);
+        }
+        nextOptions.headers = headers;
+        return nextOptions;
+    }
+
+    if (PAGE_AUTH_TOKEN) {
+        document.getElementById('back-to-vault').href = `/vault?auth_token=${encodeURIComponent(PAGE_AUTH_TOKEN)}`;
+    }
+
     // 页面加载完成后立即获取数据
     document.addEventListener('DOMContentLoaded', loadConfigs);
     async function loadConfigs() {
@@ -118,7 +135,7 @@
         const status = document.getElementById('status-msg');
         const tbody = document.getElementById('table-body');
         try {
-            const response = await fetch(CONFIG_API_ENDPOINT);
+            const response = await fetch(CONFIG_API_ENDPOINT, withAuthFetchOptions());
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             /**
              * @type {Object.<string, {symbols: ?string, length: number, platform: string}>}
@@ -169,9 +186,9 @@
         btnElement.disabled = true;
 
         try {
-            const response = await fetch(`${CONFIG_API_ENDPOINT}/${encodeURIComponent(name)}`, {
+            const response = await fetch(`${CONFIG_API_ENDPOINT}/${encodeURIComponent(name)}`, withAuthFetchOptions({
                 method: 'DELETE'
-            });
+            }));
 
             if (!response.ok) throw new Error(response.statusText);
 

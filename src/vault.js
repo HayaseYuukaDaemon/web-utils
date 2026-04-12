@@ -10,6 +10,8 @@ const SYMBOLS = "!@#%_-+";
  */
 const ALIAS_MAP = {};
 let OFFLINE_MODE = false;
+const PAGE_URL = new URL(window.location.href);
+const PAGE_AUTH_TOKEN = PAGE_URL.searchParams.get('auth_token');
 
 // DOM Elements
 const MAIN_INPUT_DOM = document.getElementById('mk');
@@ -42,23 +44,38 @@ MAIN_INPUT_DOM.addEventListener('input', async e => {
 // 2. 远程配置获取
 const CONFIG_API_ENDPOINT = '/vault/api/key_configs';
 
-async function fetchKeyConfigs(){
-    // 如果页面加载时就在离线状态（如 ServiceWorker 启动），这里可能直接抛错
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch(CONFIG_API_ENDPOINT, {
-        signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    if (!response.ok) {
-        console.error(`[Vault] Fetch configs failed: Status ${response.status}`);
-        activateOfflineMode();
-        return
+function withAuthFetchOptions(options = {}) {
+    const nextOptions = {...options};
+    const headers = new Headers(options.headers || {});
+    if (PAGE_AUTH_TOKEN && !headers.has('auth_token')) {
+        headers.set('auth_token', PAGE_AUTH_TOKEN);
     }
-    const remoteConfigs = await response.json();
-    Object.assign(ALIAS_MAP, remoteConfigs);
-    updateDatalistUI();
-    console.log(`[Vault] Successfully loaded ${Object.keys(remoteConfigs).length} configs.`);
+    nextOptions.headers = headers;
+    return nextOptions;
+}
+
+async function fetchKeyConfigs(){
+    try {
+        // 如果页面加载时就在离线状态（如 ServiceWorker 启动），这里可能直接抛错
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const response = await fetch(CONFIG_API_ENDPOINT, withAuthFetchOptions({
+            signal: controller.signal
+        }));
+        clearTimeout(timeoutId);
+        if (!response.ok) {
+            console.error(`[Vault] Fetch configs failed: Status ${response.status}`);
+            activateOfflineMode(`Auth/config fetch failed (${response.status})`);
+            return;
+        }
+        const remoteConfigs = await response.json();
+        Object.assign(ALIAS_MAP, remoteConfigs);
+        updateDatalistUI();
+        console.log(`[Vault] Successfully loaded ${Object.keys(remoteConfigs).length} configs.`);
+    } catch (error) {
+        console.error('[Vault] Fetch configs failed:', error);
+        activateOfflineMode('Config request failed');
+    }
 }
 // 启动加载
 fetchKeyConfigs().then();
@@ -99,10 +116,11 @@ document.getElementById('gen-btn').addEventListener('click', async ev => {
 });
 
 // 4. 工具函数
-function activateOfflineMode() {
+function activateOfflineMode(reason = 'Read-only') {
     if (OFFLINE_MODE) return; // 避免重复执行
     document.body.classList.add('offline-mode');
-    console.warn('[Vault] Switching to offline mode.');
+    console.warn(`[Vault] Switching to offline mode: ${reason}`);
+    showToast(reason, true);
     OFFLINE_MODE = true;
 }
 
@@ -194,11 +212,11 @@ document.getElementById('config-save-btn').addEventListener('click', async ev =>
     }
     const config = buildCurrentConfig();
     if (!config) return;
-    const response = await fetch(`${CONFIG_API_ENDPOINT}/${encodeURIComponent(config.name)}`, {
+    const response = await fetch(`${CONFIG_API_ENDPOINT}/${encodeURIComponent(config.name)}`, withAuthFetchOptions({
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(config.key_config)
-    });
+    }));
     if (!response.ok) {
         showToast(`Save failed: ${response.status}`, true);
         console.error(response.status, response.json());
@@ -221,9 +239,9 @@ document.getElementById('config-del-btn').addEventListener('click', async ev => 
     }
     if (!confirm(`Delete config "${name}"?`)) return;
     try {
-        const response = await fetch(`${CONFIG_API_ENDPOINT}/${encodeURIComponent(name)}`, {
+        const response = await fetch(`${CONFIG_API_ENDPOINT}/${encodeURIComponent(name)}`, withAuthFetchOptions({
             method: 'DELETE'
-        });
+        }));
         if (!response.ok) {
             console.error(response.status);
             showToast(`Delete Error ${response.status}`, true);
