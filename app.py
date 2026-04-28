@@ -21,6 +21,7 @@ CUSTOM_CONFIG_FILE = Path('custom_config.yaml')
 if CUSTOM_CONFIG_FILE.exists():
     logger.info(f'loading custom nodes from {CUSTOM_CONFIG_FILE}')
 SOCKS_PROXY_ENDPOINT = 'socks5://127.0.0.1:40000'
+CNA_ACCOUNT_FILE = Path('cna_account')
 # --- 密钥管理器配置 ---
 VAULT_CONFIGS_DIR = Path('vault_configs')
 if VAULT_CONFIGS_DIR.exists():
@@ -155,6 +156,16 @@ async def fetchSubUrl(jwt: str) -> str:
         return sub_url
 
 
+async def getJWTToken(username: str, password: str) -> str:
+    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT)) as client:
+        response = await client.post('https://hi.hanamaki.dev/public/api/v1/passport/auth/login',
+                                     json={'email': username, 'password': password})
+        response.raise_for_status()
+        jwt_token = response.json().get('data', {}).get('token', None)
+        if jwt_token is None:
+            raise ValueError('Login failed, token not found in response')
+        return jwt_token
+
 @proxy_router.get('/sub',
                   name='proxy.get.sub',
                   dependencies=[fastapi.Depends(Authoricator([UserAbilities.PROXY_READ]))])
@@ -169,13 +180,17 @@ async def handleSubProxies(sub_name: str = '', sub_config: str = ''):
         jwt_filename = Path('jwt_token')
         if not jwt_filename.exists():
             logger.warning(f"JWT token file not found: {jwt_filename}")
-            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR, detail='JWT token file is missing')
-        jwt_token = jwt_filename.read_text().strip()
-        if not jwt_token:
-            logger.warning("JWT token is empty")
-            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR, detail='JWT token is empty')
+            username, password = CNA_ACCOUNT_FILE.read_text().strip().splitlines()[:2]
+            jwt_token = await getJWTToken(username, password)
+            jwt_filename.write_text(jwt_token)
+        else:
+            jwt_token = jwt_filename.read_text().strip()
         try:
             sub_url = await fetchSubUrl(jwt_token)
+        except fastapi.HTTPException as e:
+            logger.error("Failed to fetch subscription URL, JWT token might be invalid. Deleting JWT token file.", exc_info=e)
+            jwt_filename.unlink(missing_ok=True)
+            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_401_UNAUTHORIZED, detail='JWT token invalid, please retry')
         except Exception as e:
             logger.exception("Failed to get subscription URL", exc_info=e)
             raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
