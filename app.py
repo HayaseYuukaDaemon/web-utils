@@ -148,7 +148,7 @@ def processCNAProxy(origin_content_str: str) -> str:
 
 async def fetchSubUrl(jwt: str) -> str:
     async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), follow_redirects=True) as client:
-        response = await client.get('https://hi.hanamaki.dev/public/api/v1/user/getSubscribe', headers={'Authorization': jwt})
+        response = await client.get('https://nmsl.cool/public/api/v1/user/getSubscribe', headers={'Authorization': jwt})
         response.raise_for_status()
         sub_url = response.json().get('data', {}).get('subscribe_url', None)
         if sub_url is None:
@@ -158,7 +158,7 @@ async def fetchSubUrl(jwt: str) -> str:
 
 async def getJWTToken(username: str, password: str) -> str:
     async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT)) as client:
-        response = await client.post('https://hi.hanamaki.dev/public/api/v1/passport/auth/login',
+        response = await client.post('https://nmsl.cool/public/api/v1/passport/auth/login',
                                      json={'email': username, 'password': password})
         response.raise_for_status()
         jwt_token = response.json().get('data', {}).get('token', None)
