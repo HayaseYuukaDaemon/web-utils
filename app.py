@@ -140,7 +140,7 @@ def processCNAProxy(origin_content_str: str) -> str:
     }
     custom_proxy_group['proxies'].insert(0, '🚀 节点选择')
     proxy_dict['proxy-groups'].insert(1, custom_proxy_group)
-    addional_rules = ('DOMAIN,gitlab.zenergize.ai'
+    addional_rules = ('DOMAIN,gitlab.zenergize.ai,DIRECT',
                       'DOMAIN-SUFFIX,google.com,Google', 
                       'DOMAIN-SUFFIX,googleapis.com,Google')
     for rule in addional_rules:
