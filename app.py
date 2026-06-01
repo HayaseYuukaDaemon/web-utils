@@ -145,6 +145,8 @@ def processCNAProxy(origin_content_str: str) -> str:
                       'DOMAIN-SUFFIX,googleapis.com,Google')
     for rule in addional_rules:
         proxy_dict['rules'].insert(-1, rule)
+        
+    proxy_dict['dns']['nameserver'].insert(0, '10.77.2.1')
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
 
 
