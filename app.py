@@ -76,12 +76,6 @@ def filterOutseaProxies(lst):
     return []
 
 
-def addNode(conf, node):
-    """Append a proxy node and its name to the first proxy-group."""
-    conf['proxies'].append(node)
-    conf['proxy-groups'][-1]['proxies'].append(node['name'])
-
-
 async def fetchProxy(sub_url: str) -> bytes | None:
     headers = {
         "User-Agent": "Clash/1.18.0",
@@ -140,13 +134,31 @@ def processCNAProxy(origin_content_str: str) -> str:
     }
     custom_proxy_group['proxies'].insert(0, '🚀 节点选择')
     proxy_dict['proxy-groups'].insert(1, custom_proxy_group)
-    addional_rules = ('DOMAIN,gitlab.zenergize.ai,DIRECT',
-                      'DOMAIN-SUFFIX,google.com,Google', 
-                      'DOMAIN-SUFFIX,googleapis.com,Google')
+    cop_proxy = { 
+        "name": "公司内网", 
+        "type": "socks5", 
+        "server": "127.0.0.1", 
+        "port": 1080, 
+        "udp": True 
+    }
+    cop_proxy_group = {
+        'name': '公司内网组',
+        'type': 'select',
+        'proxies': ['公司内网', 'DIRECT']
+    }
+    proxy_dict['proxies'].append(cop_proxy)
+    proxy_dict['proxy-groups'].insert(2, cop_proxy_group)
+    addional_rules = (
+        'DOMAIN,gitlab.zenergize.ai,DIRECT',
+        'DOMAIN-SUFFIX,google.com,Google', 
+        'DOMAIN-SUFFIX,googleapis.com,Google',
+        'IP-CIDR,10.77.0.0/16,公司内网组',
+        'DOMAIN-SUFFIX,gitlab.zenergize.ai,公司内网组',
+        'DOMAIN-SUFFIX,.lan,公司内网组',
+    )
     for rule in addional_rules:
         proxy_dict['rules'].insert(-1, rule)
         
-    proxy_dict['dns']['nameserver'].insert(0, '10.77.2.1')
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
 
 
