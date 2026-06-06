@@ -157,7 +157,7 @@ def processCNAProxy(origin_content_str: str) -> str:
         'DOMAIN-SUFFIX,.lan,公司内网组',
     )
     for rule in addional_rules:
-        proxy_dict['rules'].insert(-1, rule)
+        proxy_dict['rules'].insert(1, rule)
     for pg in proxy_dict['proxy-groups']:
         pg['proxies'].append('DIRECT')
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
