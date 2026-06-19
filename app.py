@@ -21,7 +21,22 @@ CUSTOM_CONFIG_FILE = Path('custom_config.yaml')
 if CUSTOM_CONFIG_FILE.exists():
     logger.info(f'loading custom nodes from {CUSTOM_CONFIG_FILE}')
 SOCKS_PROXY_ENDPOINT = 'socks5://127.0.0.1:40000'
+if os.name == 'nt':
+    LOCAL_MIHOMO_PATH = Path('.\\mihomo.exe')
+else:
+    LOCAL_MIHOMO_PATH = Path('mihomo')
 CNA_ACCOUNT_FILE = Path('cna_account')
+CNA_PATCH_FILE = Path('cna_patch.yaml')
+CNA_PATCH_ALLOW_KEYS = ('proxies', 'proxy-groups', 'rules')
+CNA_PATCH: dict[str, list] | None = None
+if CNA_PATCH_FILE.exists():
+    logger.info(f'loading CNA patch from {CNA_PATCH_FILE}')
+    CNA_PATCH = yaml.safe_load(CNA_PATCH_FILE.read_text(encoding='utf-8'))
+    if CNA_PATCH is None:
+        raise ValueError("Failed to load CNA patch")
+    for _key in CNA_PATCH:
+        if _key not in CNA_PATCH_ALLOW_KEYS:
+            raise FileExistsError(f'不允许使用不在名单 {CNA_PATCH_ALLOW_KEYS} 的字段')
 # --- 密钥管理器配置 ---
 VAULT_CONFIGS_DIR = Path('vault_configs')
 if VAULT_CONFIGS_DIR.exists():
@@ -134,32 +149,25 @@ def processCNAProxy(origin_content_str: str) -> str:
     }
     custom_proxy_group['proxies'].insert(0, '🚀 节点选择')
     proxy_dict['proxy-groups'].insert(1, custom_proxy_group)
-    cop_proxy = { 
-        "name": "公司内网", 
-        "type": "socks5", 
-        "server": "127.0.0.1", 
-        "port": 1080, 
-        "udp": True 
-    }
-    cop_proxy_group = {
-        'name': '公司内网组',
-        'type': 'select',
-        'proxies': ['公司内网', 'DIRECT']
-    }
-    proxy_dict['proxies'].append(cop_proxy)
-    proxy_dict['proxy-groups'].insert(2, cop_proxy_group)
     addional_rules = (
         'DOMAIN,gitlab.zenergize.ai,DIRECT',
         'DOMAIN-SUFFIX,google.com,Google', 
         'DOMAIN-SUFFIX,googleapis.com,Google',
-        'IP-CIDR,10.77.0.0/16,公司内网组',
-        'DOMAIN-SUFFIX,gitlab.zenergize.ai,公司内网组',
-        'DOMAIN-SUFFIX,.lan,公司内网组',
     )
     for rule in addional_rules:
         proxy_dict['rules'].insert(1, rule)
     for pg in proxy_dict['proxy-groups']:
         pg['proxies'].append('DIRECT')
+    # 开始处理PATCH
+    if CNA_PATCH is None:
+        return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
+    for key, value in CNA_PATCH.items():
+        if key == 'proxies':
+            proxy_dict['proxies'].extend(value)
+        elif key == 'proxy-groups':
+            proxy_dict['proxy-groups'].extend(value)
+        elif key == 'rules':
+            proxy_dict['rules'].extend(value)
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
 
 

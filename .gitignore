@@ -25,6 +25,7 @@ vault_configs/
 proxy_url
 *_proxy_url
 cf_proxy.bash
+cna_patch.yaml
 
 # Local scratch / generated files
 mypy.ini
@@ -32,7 +33,9 @@ test.py
 rec.json
 CNA.yaml
 proceed_CNA.yaml
-=
+__temp_check__.yaml
+mihomo.exe
+mihomo
 
 # Local static scratch files
 static/holiday.html
