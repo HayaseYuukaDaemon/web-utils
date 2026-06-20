@@ -110,7 +110,7 @@ async def fetchProxy(sub_url: str) -> bytes | None:
 
 def processCNAProxy(origin_content_str: str) -> str:
     proxy_dict = yaml.safe_load(origin_content_str)
-    proxy_group_white_list = ('🚀 节点选择', '💬 Telegram', '🤖 OpenAI')
+    proxy_group_white_list = ('🚀 节点选择', '💬 Telegram', '🤖 OpenAI', '🇨🇳 中国大陆')
 
     diminish_proxy_groups = []
 
