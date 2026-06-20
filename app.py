@@ -21,10 +21,6 @@ CUSTOM_CONFIG_FILE = Path('custom_config.yaml')
 if CUSTOM_CONFIG_FILE.exists():
     logger.info(f'loading custom nodes from {CUSTOM_CONFIG_FILE}')
 SOCKS_PROXY_ENDPOINT = 'socks5://127.0.0.1:40000'
-if os.name == 'nt':
-    LOCAL_MIHOMO_PATH = Path('.\\mihomo.exe')
-else:
-    LOCAL_MIHOMO_PATH = Path('mihomo')
 CNA_ACCOUNT_FILE = Path('cna_account')
 CNA_PATCH_FILE = Path('cna_patch.yaml')
 CNA_PATCH_ALLOW_KEYS = ('proxies', 'proxy-groups', 'rules')
@@ -114,7 +110,7 @@ async def fetchProxy(sub_url: str) -> bytes | None:
 
 def processCNAProxy(origin_content_str: str) -> str:
     proxy_dict = yaml.safe_load(origin_content_str)
-    proxy_group_white_list = ('🚀 节点选择', '💬 Telegram', '🇨🇳 中国大陆', '🤖 OpenAI')
+    proxy_group_white_list = ('🚀 节点选择', '💬 Telegram', '🤖 OpenAI')
 
     diminish_proxy_groups = []
 
@@ -129,9 +125,6 @@ def processCNAProxy(origin_content_str: str) -> str:
     if select_proxy_group is None:
         logger.warning('未找到节点选择分组，无法处理订阅')
         return origin_content_str
-    china_proxy_group = next((item for item in proxy_dict['proxy-groups'] if '中国大陆' in item["name"]), None)
-    if china_proxy_group:
-        china_proxy_group['proxies'].insert(1, '🚀 节点选择')
     select_proxy_group_proxies = select_proxy_group['proxies']
     only_foreign_proxies = []
     into_foreign_region = False
@@ -141,33 +134,27 @@ def processCNAProxy(origin_content_str: str) -> str:
                 into_foreign_region = True
             continue
         only_foreign_proxies.append(proxy)
-    select_proxy_group['proxies'] = only_foreign_proxies.copy()
-    custom_proxy_group = {
-        'name': 'Google',
-        'type': 'select',
-        'proxies': only_foreign_proxies
-    }
-    custom_proxy_group['proxies'].insert(0, '🚀 节点选择')
-    proxy_dict['proxy-groups'].insert(1, custom_proxy_group)
-    addional_rules = (
-        'DOMAIN,gitlab.zenergize.ai,DIRECT',
-        'DOMAIN-SUFFIX,google.com,Google', 
-        'DOMAIN-SUFFIX,googleapis.com,Google',
-    )
-    for rule in addional_rules:
-        proxy_dict['rules'].insert(1, rule)
-    for pg in proxy_dict['proxy-groups']:
-        pg['proxies'].append('DIRECT')
+    select_proxy_group['proxies'] = only_foreign_proxies
     # 开始处理PATCH
     if CNA_PATCH is None:
         return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
+    for pg in CNA_PATCH['proxy-groups']:
+        if not isinstance(pg['proxies'], str):
+            continue
+        if pg['proxies'] != 'only_foreign_proxies':
+            continue
+        pg['proxies'] = only_foreign_proxies.copy()
     for key, value in CNA_PATCH.items():
         if key == 'proxies':
             proxy_dict['proxies'].extend(value)
         elif key == 'proxy-groups':
             proxy_dict['proxy-groups'].extend(value)
         elif key == 'rules':
-            proxy_dict['rules'].extend(value)
+            for rule in value:
+                proxy_dict['rules'].insert(1, rule)
+    for pg in CNA_PATCH['proxy-groups']:
+        select_proxy_group['proxies'].append(pg['name'])
+    
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
 
 
