@@ -169,7 +169,7 @@ async def fetchSubUrl(jwt: str) -> str:
 
 
 async def getJWTToken(username: str, password: str) -> str:
-    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT)) as client:
+    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), follow_redirects=True) as client:
         response = await client.post('https://nmsl.cool/public/api/v1/passport/auth/login',
                                      json={'email': username, 'password': password})
         response.raise_for_status()
