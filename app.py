@@ -1,5 +1,6 @@
 import os
 import re
+from urllib.parse import urljoin
 from pathlib import Path
 import yaml
 from fastapi.staticfiles import StaticFiles
@@ -169,9 +170,25 @@ async def fetchSubUrl(jwt: str) -> str:
 
 
 async def getJWTToken(username: str, password: str) -> str:
-    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), follow_redirects=True) as client:
-        response = await client.post('https://nmsl.cool/public/api/v1/passport/auth/login',
-                                     params={'email': username, 'password': password})
+    url = 'https://nmsl.cool/public/api/v1/passport/auth/login/'
+    params = {'email': username, 'password': password}
+    redirect_statuses = (301, 302, 303, 307, 308)
+    response = None
+    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), follow_redirects=False) as client:
+        for _ in range(5):
+            response = await client.post(url, params=params)
+            if response.status_code not in redirect_statuses:
+                break
+
+            location = response.headers.get('location')
+            if not location:
+                break
+            url = urljoin(str(response.request.url), location)
+            params = None
+        if response is None:
+            raise RuntimeError('resp为None')
+        if response.status_code in redirect_statuses:
+            raise ValueError('Login failed after redirects')
         response.raise_for_status()
         jwt_token = response.json().get('data', {}).get('token', None)
         if jwt_token is None:
