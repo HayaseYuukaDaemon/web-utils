@@ -190,7 +190,7 @@ async def getJWTToken(username: str, password: str) -> str:
         if response.status_code in redirect_statuses:
             raise ValueError('Login failed after redirects')
         response.raise_for_status()
-        jwt_token = response.json().get('data', {}).get('token', None)
+        jwt_token = response.json().get('data', {}).get('auth_data', None)
         if jwt_token is None:
             raise ValueError('Login failed, token not found in response')
         return jwt_token
