@@ -88,18 +88,9 @@ def filterOutseaProxies(lst):
     return []
 
 
-async def fetchProxy(sub_url: str) -> bytes | None:
-    headers = {
-        "User-Agent": "Clash/1.18.0",
-        "Accept-Encoding": "gzip",  # Clash 通常只发这个
-        "Connection": "keep-alive"
-    }
+async def fetchProxy(sub_url: str, client: httpx.AsyncClient) -> bytes | None:
     try:
-        async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT),
-                                     headers=headers,
-                                     max_redirects=50,
-                                     follow_redirects=True) as client:
-            response = await client.get(sub_url)
+        response = await client.get(sub_url)
         if response.status_code == 200:
             return response.content
         else:
@@ -159,79 +150,89 @@ def processCNAProxy(origin_content_str: str) -> str:
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
 
 
-async def fetchSubUrl(jwt: str) -> str:
-    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), follow_redirects=True) as client:
-        response = await client.get('https://nmsl.cool/public/api/v1/user/getSubscribe', headers={'Authorization': jwt})
-        response.raise_for_status()
-        sub_url = response.json().get('data', {}).get('subscribe_url', None)
-        if sub_url is None:
+async def fetchSubUrl(jwt: str, client: httpx.AsyncClient) -> str:
+    response = await client.get('https://nmsl.cool/public/api/v1/user/getSubscribe', headers={'Authorization': jwt})
+    response.raise_for_status()
+    sub_url = response.json().get('data', {}).get('subscribe_url', None)
+    if sub_url is None:
             raise ValueError('订阅链接不存在')
-        return sub_url
+    return sub_url
 
 
-async def getJWTToken(username: str, password: str) -> str:
+async def getJWTToken(username: str, password: str, client: httpx.AsyncClient) -> str:
     url = 'https://nmsl.cool/public/api/v1/passport/auth/login/'
     params = {'email': username, 'password': password}
     redirect_statuses = (301, 302, 303, 307, 308)
     response = None
-    async with httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), follow_redirects=False) as client:
-        for _ in range(5):
-            response = await client.post(url, params=params)
-            if response.status_code not in redirect_statuses:
-                break
+    for _ in range(5):
+        response = await client.post(url, params=params)
+        if response.status_code not in redirect_statuses:
+            break
 
-            location = response.headers.get('location')
-            if not location:
-                break
-            url = urljoin(str(response.request.url), location)
-            params = None
-        if response is None:
-            raise RuntimeError('resp为None')
-        if response.status_code in redirect_statuses:
-            raise ValueError('Login failed after redirects')
-        response.raise_for_status()
-        jwt_token = response.json().get('data', {}).get('auth_data', None)
-        if jwt_token is None:
-            raise ValueError('Login failed, token not found in response')
-        return jwt_token
+        location = response.headers.get('location')
+        if not location:
+            break
+        url = urljoin(str(response.request.url), location)
+        params = None
+    if response is None:
+        raise RuntimeError('resp为None')
+    if response.status_code in redirect_statuses:
+        raise ValueError('Login failed after redirects')
+    response.raise_for_status()
+    jwt_token = response.json().get('data', {}).get('auth_data', None)
+    if jwt_token is None:
+        raise ValueError('Login failed, token not found in response')
+    return jwt_token
 
 @proxy_router.get('/sub',
                   name='proxy.get.sub',
                   dependencies=[fastapi.Depends(Authoricator([UserAbilities.PROXY_READ]))])
 async def handleSubProxies(sub_name: str = '', sub_config: str = ''):
-    if sub_name:
-        proxy_filename = Path(f'{sub_name}_proxy_url')
-        if not proxy_filename.exists():
-            logger.warning(f"Proxy configuration error: {proxy_filename} not found.")
-            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Proxy configuration file not found')
-        upstream_content = await fetchProxy(proxy_filename.read_text().strip())
-    else:
-        jwt_filename = Path('jwt_token')
-        if not jwt_filename.exists():
-            logger.warning(f"JWT token file not found: {jwt_filename}")
-            username, password = CNA_ACCOUNT_FILE.read_text().strip().splitlines()[:2]
-            jwt_token = await getJWTToken(username, password)
-            jwt_filename.write_text(jwt_token)
+    headers = {
+        "User-Agent": "Clash/1.18.0",
+        "Accept-Encoding": "gzip",  # Clash 通常只发这个
+        "Connection": "keep-alive"
+    }
+    client = httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT),
+                                     headers=headers,
+                                     max_redirects=50,
+                                     follow_redirects=True)
+    try:
+        if sub_name:
+            proxy_filename = Path(f'{sub_name}_proxy_url')
+            if not proxy_filename.exists():
+                logger.warning(f"Proxy configuration error: {proxy_filename} not found.")
+                raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Proxy configuration file not found')
+            upstream_content = await fetchProxy(proxy_filename.read_text().strip(), client)
         else:
-            jwt_token = jwt_filename.read_text().strip()
-        try:
-            sub_url = await fetchSubUrl(jwt_token)
-        except fastapi.HTTPException as e:
-            logger.error("Failed to fetch subscription URL, JWT token might be invalid. Deleting JWT token file.", exc_info=e)
-            jwt_filename.unlink(missing_ok=True)
-            raise fastapi.HTTPException(status_code=fastapi.status.HTTP_401_UNAUTHORIZED, detail='JWT token invalid, please retry')
-        except Exception as e:
-            logger.exception("Failed to get subscription URL", exc_info=e)
+            jwt_filename = Path('jwt_token')
+            if not jwt_filename.exists():
+                logger.warning(f"JWT token file not found: {jwt_filename}")
+                username, password = CNA_ACCOUNT_FILE.read_text().strip().splitlines()[:2]
+                jwt_token = await getJWTToken(username, password, client)
+                jwt_filename.write_text(jwt_token)
+            else:
+                jwt_token = jwt_filename.read_text().strip()
+            try:
+                sub_url = await fetchSubUrl(jwt_token, client)
+            except fastapi.HTTPException as e:
+                logger.error("Failed to fetch subscription URL, JWT token might be invalid. Deleting JWT token file.", exc_info=e)
+                jwt_filename.unlink(missing_ok=True)
+                raise fastapi.HTTPException(status_code=fastapi.status.HTTP_401_UNAUTHORIZED, detail='JWT token invalid, please retry')
+            except Exception as e:
+                logger.exception("Failed to get subscription URL", exc_info=e)
+                raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                            detail='获取订阅链接失败')
+            upstream_content = await fetchProxy(sub_url, client)
+        if upstream_content is None:
             raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                        detail='获取订阅链接失败')
-        upstream_content = await fetchProxy(sub_url)
-    if upstream_content is None:
-        raise fastapi.HTTPException(status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                    detail='详情见服务器log')
-    if sub_config == 'origin':
-        return fastapi.Response(upstream_content, media_type='application/x-yaml')
-    proceed_proxy = processCNAProxy(upstream_content.decode())
-    return fastapi.Response(proceed_proxy, media_type='application/x-yaml')
+                                        detail='详情见服务器log')
+        if sub_config == 'origin':
+            return fastapi.Response(upstream_content, media_type='application/x-yaml')
+        proceed_proxy = processCNAProxy(upstream_content.decode())
+        return fastapi.Response(proceed_proxy, media_type='application/x-yaml')
+    finally:
+        await client.aclose()
 
 
 @proxy_router.get('/',
