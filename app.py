@@ -151,7 +151,9 @@ def processCNAProxy(origin_content_str: str) -> str:
 
 
 async def fetchSubUrl(jwt: str, client: httpx.AsyncClient) -> str:
-    response = await client.get('https://nmsl.cool/public/api/v1/user/getSubscribe', headers={'Authorization': jwt})
+    response = await client.get('https://nmsl.cool/public/api/v1/user/getSubscribe', 
+                                headers={'Authorization': jwt},
+                                follow_redirects=True)
     response.raise_for_status()
     sub_url = response.json().get('data', {}).get('subscribe_url', None)
     if sub_url is None:
