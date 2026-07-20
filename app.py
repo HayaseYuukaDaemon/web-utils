@@ -164,7 +164,7 @@ async def getJWTToken(username: str, password: str, client: httpx.AsyncClient) -
     params = {'email': username, 'password': password}
     redirect_statuses = (301, 302, 303, 307, 308)
     response = None
-    for _ in range(5):
+    for _ in range(10):
         response = await client.post(url, params=params)
         if response.status_code not in redirect_statuses:
             break
@@ -193,10 +193,7 @@ async def handleSubProxies(sub_name: str = '', sub_config: str = ''):
         "Accept-Encoding": "gzip",  # Clash 通常只发这个
         "Connection": "keep-alive"
     }
-    client = httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT),
-                                     headers=headers,
-                                     max_redirects=50,
-                                     follow_redirects=True)
+    client = httpx.AsyncClient(proxy=httpx.Proxy(SOCKS_PROXY_ENDPOINT), headers=headers)
     try:
         if sub_name:
             proxy_filename = Path(f'{sub_name}_proxy_url')
@@ -365,10 +362,6 @@ app.include_router(vault_router)
 # --- 密钥管理器结束 ---
 
 # --- Dataset 评分系统 ---
-# 挂载 mock_r2 静态文件目录（用于本地开发）
-if Path('mock_r2').exists():
-    app.mount("/mock_r2", StaticFiles(directory="mock_r2"), name="mock_r2")
-    logger.info('已挂载 mock_r2 静态文件目录')
 
 # 包含 dataset 路由
 from dataset_api import dataset_router, dataset_service
