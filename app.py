@@ -113,12 +113,14 @@ def processCNAProxy(origin_content_str: str) -> str:
     proxy_dict['proxy-groups'] = list(filter(lambda pg: pg['name'] not in diminish_proxy_groups, proxy_dict['proxy-groups']))
     proxy_dict['rules'] = list(filter(lambda r: r.split(',')[-1] not in diminish_proxy_groups, proxy_dict['rules']))
 
-    select_proxy_group = next((item for item in proxy_dict['proxy-groups'] if '节点选择' in item["name"]), None)
+    cna_pgs: list[dict[str, str | list[str]]] = proxy_dict['proxy-groups']
+
+    select_proxy_group = next((item for item in cna_pgs if '节点选择' in item["name"]), None)
     if select_proxy_group is None:
         logger.warning('未找到节点选择分组，无法处理订阅')
         return origin_content_str
     select_proxy_group_proxies = select_proxy_group['proxies']
-    only_foreign_proxies = []
+    only_foreign_proxies: list[str] = []
     into_foreign_region = False
     for proxy in select_proxy_group_proxies:
         if not into_foreign_region:
@@ -130,12 +132,10 @@ def processCNAProxy(origin_content_str: str) -> str:
     # 开始处理PATCH
     if CNA_PATCH is None:
         return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
+    
     for pg in CNA_PATCH['proxy-groups']:
-        if not isinstance(pg['proxies'], str):
-            continue
-        if pg['proxies'] != 'only_foreign_proxies':
-            continue
-        pg['proxies'] = only_foreign_proxies.copy()
+        if 'proxies' not in pg:
+            pg['proxies'] = only_foreign_proxies.copy()
     for key, value in CNA_PATCH.items():
         if key == 'proxies':
             proxy_dict['proxies'].extend(value)
@@ -144,8 +144,13 @@ def processCNAProxy(origin_content_str: str) -> str:
         elif key == 'rules':
             for rule in value:
                 proxy_dict['rules'].insert(1, rule)
-    for pg in CNA_PATCH['proxy-groups']:
-        select_proxy_group['proxies'].append(pg['name'])
+
+    for proxy in CNA_PATCH['proxies']:
+        for opg in cna_pgs:
+            if proxy['name'] in opg['proxies']:
+                break
+            assert isinstance(opg['proxies'], list)
+            opg['proxies'].append(proxy['name'])
     
     return yaml.safe_dump(proxy_dict, allow_unicode=True, default_flow_style=False)
 
