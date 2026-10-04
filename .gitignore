@@ -40,3 +40,5 @@ mihomo
 # Local static scratch files
 static/holiday.html
 static/test
+
+temp/

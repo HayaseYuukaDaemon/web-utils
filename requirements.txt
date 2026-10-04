@@ -1,9 +1,0 @@
-httpx[socks]
-PyYAML
-fastapi
-pydantic
-colorlog
-pixivpy-async
-pillow
-natsort
-rich
