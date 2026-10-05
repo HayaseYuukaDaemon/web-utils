@@ -147,7 +147,6 @@ func readProviderPatch(filePath string) *ProviderPatch {
 	}
 	defer file.Close()
 	decoder := yaml.NewDecoder(file)
-	decoder.KnownFields(true)
 	var patch ProviderPatch
 	if err := decoder.Decode(&patch); err != nil {
 		slog.Warn("Cannot decode patch", "err", err)
