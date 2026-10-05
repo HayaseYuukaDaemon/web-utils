@@ -112,9 +112,11 @@ func main() {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	proxyApp := NewProxyApp(&http.Client{Transport: transport})
+	vaultApp := NewVaultApp()
 
 	mux := http.NewServeMux()
-	mux.Handle("GET /proxy/", http.StripPrefix("/proxy", proxyApp.mux))
+	mux.Handle("/proxy/", http.StripPrefix("/proxy", proxyApp.mux))
+	mux.Handle("/vault/", http.StripPrefix("/vault", vaultApp.mux))
 
 	middleware := Middleware{
 		mux: mux,

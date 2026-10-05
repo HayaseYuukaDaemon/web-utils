@@ -447,5 +447,6 @@ func NewProxyApp(client *http.Client) *ProxyApp {
 		w.Write(patched)
 	})
 	app.mux = mux
+	slog.Info("Proxy app initialized")
 	return app
 }
