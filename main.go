@@ -16,6 +16,8 @@ import (
 
 	"github.com/pterm/pterm"
 	"gopkg.in/yaml.v3"
+
+	_ "modernc.org/sqlite"
 )
 
 func parseLogLevel(s string) (pterm.LogLevel, error) {

@@ -27,7 +27,7 @@ func (a *VaultApp) GetMux() *http.ServeMux {
 }
 
 func (a *VaultApp) initDB(ctx context.Context, path string) error {
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return err
 	}
@@ -35,7 +35,7 @@ func (a *VaultApp) initDB(ctx context.Context, path string) error {
 			name TEXT PRIMARY KEY,
 			platform TEXT NOT NULL,
 			symbols TEXT NOT NULL,
-			length INTEGER NOT NULL,
+			length INTEGER NOT NULL
 		)`); err != nil {
 		return err
 	}
