@@ -34,9 +34,14 @@ func parseLogLevel(s string) (pterm.LogLevel, error) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	if value != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(value)
+	}
 }
 
 type Middleware struct {
@@ -112,7 +117,7 @@ func main() {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	proxyApp := NewProxyApp(&http.Client{Transport: transport})
-	vaultApp := NewVaultApp()
+	vaultApp := NewVaultApp("vault.db")
 
 	mux := http.NewServeMux()
 	mux.Handle("/proxy/", http.StripPrefix("/proxy", proxyApp.mux))
