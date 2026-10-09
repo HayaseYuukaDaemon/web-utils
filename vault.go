@@ -17,9 +17,9 @@ type VaultApp struct {
 }
 
 type VaultConfig struct {
-	Platform string
-	Symbols  string
-	Length   int
+	Platform string `json:"platform"`
+	Symbols  string `json:"symbols"`
+	Length   int    `json:"length"`
 }
 
 func (a *VaultApp) GetMux() *http.ServeMux {
