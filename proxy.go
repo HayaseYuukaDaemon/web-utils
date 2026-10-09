@@ -251,7 +251,7 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 			return nil, fmt.Errorf("你妈的笑话, 没代理你用尼玛呢")
 		}
 		patchProxyNames := []string{}
-		if err := proxies.IterateList(func(i int, item *EditableYAML) error {
+		if err := WrapYAML(&patch.Proxies).IterateList(func(i int, item *EditableYAML) error {
 			var proxy NamedItem
 			if err := item.Decode(&proxy); err != nil {
 				return fmt.Errorf("failed to decode proxy: %w", err)
