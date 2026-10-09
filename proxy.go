@@ -250,9 +250,35 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		if proxies == nil {
 			return nil, fmt.Errorf("你妈的笑话, 没代理你用尼玛呢")
 		}
+		patchProxyNames := []string{}
+		if err := proxies.IterateList(func(i int, item *EditableYAML) error {
+			var proxy NamedItem
+			if err := item.Decode(&proxy); err != nil {
+				return fmt.Errorf("failed to decode proxy: %w", err)
+			}
+			patchProxyNames = append(patchProxyNames, proxy.Name)
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("failed to iterate patch proxies: %w", err)
+		}
+		var patchProxyNamesYAML yaml.Node
+		if err := patchProxyNamesYAML.Encode(patchProxyNames); err != nil {
+			return nil, fmt.Errorf("failed to encode patch proxy names: %w", err)
+		}
 		proxies.Content = slices.Concat(proxies.Content, patch.Proxies.Content)
 		// 添加代理组
 		proxyGroups.Content = slices.Concat(proxyGroups.Content, patch.ProxyGroups.Content)
+		if err := proxyGroups.IterateList(func(i int, item *EditableYAML) error {
+			pgProxies := item.GetMapValue("proxies")
+			if pgProxies == nil {
+				slog.Warn("proxy group has no proxies", "index", i)
+				return nil
+			}
+			pgProxies.Content = slices.Concat(pgProxies.Content, patchProxyNamesYAML.Content)
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("failed to iterate proxy groups: %w", err)
+		}
 		// 添加规则
 		rules.Content = slices.Insert(rules.Content, 0, patch.Rules.Content...)
 	}
