@@ -464,7 +464,7 @@ func NewProxyApp(client *http.Client) *ProxyApp {
 		}
 		if r.URL.Query().Get("raw") != "" {
 			buf := bytes.NewBuffer([]byte{})
-			if err := sub.Encode(buf); err != nil {
+			if err := yaml.NewEncoder(buf).Encode(sub); err != nil {
 				http.Error(w, "编码上游内容时出错: "+err.Error(), 500)
 				return
 			}
