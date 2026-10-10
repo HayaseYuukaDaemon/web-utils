@@ -266,8 +266,7 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 			return nil, fmt.Errorf("failed to encode patch proxy names: %w", err)
 		}
 		proxies.Content = slices.Concat(proxies.Content, patch.Proxies.Content)
-		// 添加代理组
-		proxyGroups.Content = slices.Concat(proxyGroups.Content, patch.ProxyGroups.Content)
+		// 为代理组添加代理
 		if err := proxyGroups.IterateList(func(i int, item *EditableYAML) error {
 			pgProxies := item.GetMapValue("proxies")
 			if pgProxies == nil {
@@ -279,6 +278,8 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		}); err != nil {
 			return nil, fmt.Errorf("failed to iterate proxy groups: %w", err)
 		}
+		// 添加代理组
+		proxyGroups.Content = slices.Concat(proxyGroups.Content, patch.ProxyGroups.Content)
 		// 添加规则
 		rules.Content = slices.Insert(rules.Content, 0, patch.Rules.Content...)
 	}
@@ -461,16 +462,23 @@ func NewProxyApp(client *http.Client) *ProxyApp {
 			http.Error(w, "获取订阅内容时出错: "+err.Error(), 500)
 			return
 		}
-
-		patch := readProviderPatch("patch.yaml")
-		patched, err := ProcessCIAProxy(sub, patch)
-		if err != nil {
-			var s any
-			sub.Decode(&s)
-			http.Error(w, "处理上游内容时出错: "+err.Error()+", 原始数据: "+fmt.Sprintf("%v", s), 500)
-			return
+		if r.URL.Query().Get("raw") != "" {
+			buf := bytes.NewBuffer([]byte{})
+			if err := sub.Encode(buf); err != nil {
+				http.Error(w, "编码上游内容时出错: "+err.Error(), 500)
+				return
+			}
+			w.Write(buf.Bytes())
+		} else {
+			patch := readProviderPatch("patch.yaml")
+			patched, err := ProcessCIAProxy(sub, patch)
+			if err != nil {
+				http.Error(w, "处理上游内容时出错: "+err.Error(), 500)
+				return
+			}
+			w.Write(patched)
 		}
-		w.Write(patched)
+
 	})
 	app.mux = mux
 	slog.Info("Proxy app initialized")

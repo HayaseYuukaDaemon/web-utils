@@ -120,10 +120,12 @@ func main() {
 	transport.Proxy = nil
 	proxyApp := NewProxyApp(&http.Client{Transport: transport})
 	vaultApp := NewVaultApp("vault.db")
+	datasetApp := NewDatasetApp("dataset.db")
 
 	mux := http.NewServeMux()
 	mux.Handle("/proxy/", http.StripPrefix("/proxy", proxyApp.mux))
 	mux.Handle("/vault/", http.StripPrefix("/vault", vaultApp.mux))
+	mux.Handle("/dataset/", http.StripPrefix("/dataset", datasetApp.mux))
 
 	middleware := Middleware{
 		mux: mux,
