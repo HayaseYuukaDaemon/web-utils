@@ -265,7 +265,12 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		if err := patchProxyNamesYAML.Encode(patchProxyNames); err != nil {
 			return nil, fmt.Errorf("failed to encode patch proxy names: %w", err)
 		}
+		// 添加代理
 		proxies.Content = slices.Concat(proxies.Content, patch.Proxies.Content)
+		// 添加代理组
+		proxyGroups.Content = slices.Concat(proxyGroups.Content, patch.ProxyGroups.Content)
+		// 添加规则
+		rules.Content = slices.Insert(rules.Content, 0, patch.Rules.Content...)
 		// 为代理组添加代理
 		if err := proxyGroups.IterateList(func(i int, item *EditableYAML) error {
 			pgProxies := item.GetMapValue("proxies")
@@ -278,10 +283,6 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		}); err != nil {
 			return nil, fmt.Errorf("failed to iterate proxy groups: %w", err)
 		}
-		// 添加代理组
-		proxyGroups.Content = slices.Concat(proxyGroups.Content, patch.ProxyGroups.Content)
-		// 添加规则
-		rules.Content = slices.Insert(rules.Content, 0, patch.Rules.Content...)
 	}
 
 	final := bytes.NewBuffer([]byte{})
