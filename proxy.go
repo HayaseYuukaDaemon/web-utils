@@ -279,6 +279,10 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 				return nil
 			}
 			pgProxies.Content = slices.Concat(pgProxies.Content, patchProxyNamesYAML.Content)
+			pgProxies.Content = append(pgProxies.Content, &yaml.Node{
+				Kind:  yaml.ScalarNode,
+				Value: "DIRECT",
+			})
 			return nil
 		}); err != nil {
 			return nil, fmt.Errorf("failed to iterate proxy groups: %w", err)
