@@ -232,24 +232,7 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 
 	// 处理patch
 	if patch != nil {
-		// 补全代理
-		var foreignProxyNamesYAML yaml.Node
-		if err := foreignProxyNamesYAML.Encode(foreignProxyNames); err != nil {
-			return nil, fmt.Errorf("failed to encode foreign proxy names: %w", err)
-		}
-		if err := WrapYAML(&patch.ProxyGroups).IterateList(func(i int, item *EditableYAML) error {
-			// 直接忽略错误, 跳过已有内容的patch
-			item.AddMapValue("proxies", &foreignProxyNamesYAML)
-			return nil
-		}); err != nil {
-			return nil, fmt.Errorf("failed to iterate patch proxy groups: %w", err)
-		}
-
-		// 添加代理
-		proxies := wrappedYAML.GetMapValue("proxies")
-		if proxies == nil {
-			return nil, fmt.Errorf("你妈的笑话, 没代理你用尼玛呢")
-		}
+		// 构造 patch 代理的 names
 		patchProxyNames := []string{}
 		if err := WrapYAML(&patch.Proxies).IterateList(func(i int, item *EditableYAML) error {
 			var proxy NamedItem
@@ -265,13 +248,7 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		if err := patchProxyNamesYAML.Encode(patchProxyNames); err != nil {
 			return nil, fmt.Errorf("failed to encode patch proxy names: %w", err)
 		}
-		// 添加代理
-		proxies.Content = slices.Concat(proxies.Content, patch.Proxies.Content)
-		// 添加代理组
-		proxyGroups.Content = slices.Concat(proxyGroups.Content, patch.ProxyGroups.Content)
-		// 添加规则
-		rules.Content = slices.Insert(rules.Content, 0, patch.Rules.Content...)
-		// 为代理组添加代理
+		// 为原有代理组添加 patch 代理
 		if err := proxyGroups.IterateList(func(i int, item *EditableYAML) error {
 			pgProxies := item.GetMapValue("proxies")
 			if pgProxies == nil {
@@ -279,14 +256,42 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 				return nil
 			}
 			pgProxies.Content = slices.Concat(pgProxies.Content, patchProxyNamesYAML.Content)
-			pgProxies.Content = append(pgProxies.Content, &yaml.Node{
-				Kind:  yaml.ScalarNode,
-				Value: "DIRECT",
-			})
 			return nil
 		}); err != nil {
 			return nil, fmt.Errorf("failed to iterate proxy groups: %w", err)
 		}
+
+		// 构造用于填充空代理组的 names
+		var fillingProxyNamesYAML yaml.Node
+		if err := fillingProxyNamesYAML.Encode(foreignProxyNames); err != nil {
+			return nil, fmt.Errorf("failed to encode foreign proxy names: %w", err)
+		}
+		fillingProxyNamesYAML.Content = slices.Concat(fillingProxyNamesYAML.Content, patchProxyNamesYAML.Content)
+		fillingProxyNamesYAML.Content = append(fillingProxyNamesYAML.Content, &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Value: "DIRECT",
+		})
+		// 填充空代理
+		if err := WrapYAML(&patch.ProxyGroups).IterateList(func(i int, item *EditableYAML) error {
+			// 直接忽略错误, 跳过已有内容的patch
+			item.AddMapValue("proxies", &fillingProxyNamesYAML)
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("failed to iterate patch proxy groups: %w", err)
+		}
+
+		// 添加代理
+		proxies := wrappedYAML.GetMapValue("proxies")
+		if proxies == nil {
+			return nil, fmt.Errorf("你妈的笑话, 没代理你用尼玛呢")
+		}
+
+		// 添加代理
+		proxies.Content = slices.Concat(proxies.Content, patch.Proxies.Content)
+		// 添加代理组
+		proxyGroups.Content = slices.Concat(proxyGroups.Content, patch.ProxyGroups.Content)
+		// 添加规则
+		rules.Content = slices.Insert(rules.Content, 0, patch.Rules.Content...)
 	}
 
 	final := bytes.NewBuffer([]byte{})
