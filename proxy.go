@@ -166,10 +166,7 @@ type NamedItem struct {
 // patch不可复用
 func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 	proxyGroupWhiteSet := map[string]bool{
-		"🚀 节点选择":     true,
-		"💬 Telegram": true,
-		"🤖 OpenAI":   true,
-		"🇨🇳 中国大陆":    true,
+		"自动选择": true,
 	}
 
 	wrappedYAML := WrapYAML(config.Content[0])
@@ -223,7 +220,11 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		return nil, fmt.Errorf("无规则组")
 	}
 	if err := rules.DeleteListIf(func(i int, item *EditableYAML) bool {
-		pgName := strings.Split(item.Value, ",")[len(strings.Split(item.Value, ","))-1]
+		splitedRule := strings.Split(item.Value, ",")
+		pgName := splitedRule[len(splitedRule)-1]
+		if pgName == "no-resolve" {
+			pgName = splitedRule[len(splitedRule)-2]
+		}
 		_, ok := diminishedProxyGroupNames[pgName]
 		return ok
 	}); err != nil {
