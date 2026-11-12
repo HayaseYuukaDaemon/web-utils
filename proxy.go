@@ -165,7 +165,7 @@ type NamedItem struct {
 
 // patch不可复用
 func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
-	proxyGroupWhiteList := []string{"自动选择"}
+	proxyGroupWhiteList := []string{"中国国际机场"}
 
 	wrappedYAML := WrapYAML(config.Content[0])
 
