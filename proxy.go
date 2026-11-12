@@ -165,9 +165,7 @@ type NamedItem struct {
 
 // patch不可复用
 func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
-	proxyGroupWhiteSet := map[string]bool{
-		"自动选择": true,
-	}
+	proxyGroupWhiteList := []string{"自动选择"}
 
 	wrappedYAML := WrapYAML(config.Content[0])
 
@@ -186,9 +184,8 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		if err := item.Decode(&pg); err != nil {
 			return false
 		}
-		val, ok := proxyGroupWhiteSet[pg.Name]
 		// 过滤节点选择中的大陆节点
-		if strings.Contains(pg.Name, "节点选择") {
+		if pg.Name == proxyGroupWhiteList[0] {
 			selectProxies := item.GetMapValue("proxies")
 			inForeignRegion := false
 			if err := selectProxies.DeleteListIf(func(i int, item *EditableYAML) bool {
@@ -205,7 +202,7 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 				return false
 			}
 		}
-		diminish := !(ok && val)
+		diminish := !slices.Contains(proxyGroupWhiteList, pg.Name)
 		if diminish {
 			diminishedProxyGroupNames[pg.Name] = struct{}{}
 		}
