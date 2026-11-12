@@ -329,7 +329,7 @@ func (a *ProxyApp) fetchSub(ctx context.Context, subURL string) (*yaml.Node, err
 }
 
 func (a *ProxyApp) fetchSubURL(ctx context.Context, jwt string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://nmsl.cool/public/api/v1/user/getSubscribe", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://nmsl.cool/public/9e23c1958578/user/getSubscribe", nil)
 	if err != nil {
 		return "", err
 	}
@@ -358,7 +358,7 @@ func (a *ProxyApp) fetchSubURL(ctx context.Context, jwt string) (string, error) 
 }
 
 func (a *ProxyApp) getJWTToken(ctx context.Context, account, password string) (string, error) {
-	url, err := url.Parse("https://nmsl.cool/public/api/v1/passport/auth/login/")
+	url, err := url.Parse("https://nmsl.cool/public/9e23c1958578/passport/auth/login/")
 	if err != nil {
 		return "", err
 	}
