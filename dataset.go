@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 )
 
@@ -23,5 +24,6 @@ func NewDatasetApp(dbPath string) *DatasetApp {
 	app := &DatasetApp{
 		mux: mux,
 	}
+	slog.Info("Dataset app initialized")
 	return app
 }
