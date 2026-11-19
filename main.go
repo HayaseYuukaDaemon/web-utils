@@ -52,20 +52,25 @@ type Middleware struct {
 }
 
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if m.authToken != "" {
-		reqAuthToken, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !found {
-			queryToken := r.URL.Query().Get("token")
-			if queryToken != m.authToken {
-				http.Error(w, "Invalid authorization token", 401)
-				return
-			}
+	if m.authToken == "" {
+		m.mux.ServeHTTP(w, r)
+		return
+	}
+	token := ""
+	reqAuthToken, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !found {
+		cookieToken, err := r.Cookie("token")
+		if err != nil {
+			token = r.URL.Query().Get("token")
 		} else {
-			if reqAuthToken != m.authToken {
-				http.Error(w, "Invalid authorization token", 401)
-				return
-			}
+			token = cookieToken.Value
 		}
+	} else {
+		token = reqAuthToken
+	}
+	if token != m.authToken {
+		http.Error(w, "Invalid authorization token", 401)
+		return
 	}
 	m.mux.ServeHTTP(w, r)
 }
