@@ -162,6 +162,21 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		// 填充空代理
 		if err := WrapYAML(&patch.ProxyGroups).IterateList(func(i int, item *EditableYAML) error {
 			// 直接忽略错误, 跳过已有内容的patch
+			fillMe := item.GetMapValue("fill-me")
+			if fillMe == nil {
+				return nil
+			}
+			var enable bool
+			if err := fillMe.Decode(&enable); err != nil {
+				slog.Warn("invalid fill-me config", "err", err)
+				return nil // 忽略错误
+			}
+			if !enable {
+				return nil
+			}
+			item.DeleteMapValue("include-all")
+			item.DeleteMapValue("fill-me")
+			fillMe = nil
 			item.AddMapValue("proxies", &fillingProxyNamesYAML)
 			return nil
 		}); err != nil {
