@@ -161,7 +161,10 @@ func ProcessCIAProxy(config *yaml.Node, patch *ProviderPatch) ([]byte, error) {
 		})
 		// 填充空代理
 		if err := WrapYAML(&patch.ProxyGroups).IterateList(func(i int, item *EditableYAML) error {
-			// 直接忽略错误, 跳过已有内容的patch
+			proxies := item.GetMapValue("proxies")
+			if proxies != nil {
+				return nil
+			}
 			fillMe := item.GetMapValue("fill-me")
 			if fillMe == nil {
 				return nil
