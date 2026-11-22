@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"web-utils/notify"
 
 	"github.com/pterm/pterm"
 	"gopkg.in/yaml.v3"
@@ -126,11 +127,27 @@ func main() {
 	proxyApp := NewProxyApp(&http.Client{Transport: transport})
 	vaultApp := NewVaultApp("vault.db")
 	datasetApp := NewDatasetApp("dataset.db")
+	var notifiers []notify.Notifier
+	qqMail := os.Getenv("QQ_MAIL")
+	if qqMail != "" {
+		authCode := os.Getenv("QQ_AUTHCODE")
+		if authCode == "" {
+			panic("auth code not set")
+		}
+		qqNotifier := notify.NewQQNotifier(qqMail, authCode, "qq")
+		notifiers = append(notifiers, qqNotifier)
+		slog.Info("QQ notifier registered", "mail", qqMail)
+	}
+	notifyApp, err := notify.NewNotifyApp(notifiers)
+	if err != nil {
+		panic(fmt.Errorf("failed to init notify app: %w", err))
+	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/proxy/", http.StripPrefix("/proxy", proxyApp.mux))
-	mux.Handle("/vault/", http.StripPrefix("/vault", vaultApp.mux))
-	mux.Handle("/dataset/", http.StripPrefix("/dataset", datasetApp.mux))
+	mux.Handle("/proxy/", http.StripPrefix("/proxy", proxyApp.GetMux()))
+	mux.Handle("/vault/", http.StripPrefix("/vault", vaultApp.GetMux()))
+	mux.Handle("/dataset/", http.StripPrefix("/dataset", datasetApp.GetMux()))
+	mux.Handle("/notify/", http.StripPrefix("/notify", notifyApp.GetMux()))
 
 	middleware := Middleware{
 		mux: mux,
