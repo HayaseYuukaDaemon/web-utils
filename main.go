@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,6 +82,9 @@ type UtilApp interface {
 	GetMux() *http.ServeMux
 }
 
+//go:embed schema.sql
+var schemaSQL string
+
 func main() {
 	level, err := parseLogLevel(os.Getenv("LOG_LEVEL"))
 	if err != nil {
@@ -124,9 +129,34 @@ func main() {
 
 	nonProxyTransport := http.DefaultTransport.(*http.Transport).Clone()
 	nonProxyTransport.Proxy = nil
+
+	const DB_PATH = "runtime.sqlite"
+
+	db, err := sql.Open("sqlite", DB_PATH)
+	if err != nil {
+		panic(fmt.Errorf("failed to open sqlite db: %w", err))
+	}
+
+	initCtx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	_, err = db.ExecContext(initCtx, schemaSQL)
+	if err != nil {
+		panic(fmt.Errorf("failed to init db: %w", err))
+	}
+
 	proxyApp := NewProxyApp(&http.Client{Transport: nonProxyTransport})
-	vaultApp := NewVaultApp("vault.db")
-	datasetApp := NewDatasetApp("dataset.db")
+
+	vaultApp, err := NewVaultApp(initCtx, db)
+	if err != nil {
+		panic(fmt.Errorf("failed to init vault app: %w", err))
+	}
+
+	datasetApp, err := NewDatasetApp(initCtx, db)
+	if err != nil {
+		panic(fmt.Errorf("failed to init dataset app: %w", err))
+	}
+
 	var notifiers []notify.Notifier
 	qqMail := os.Getenv("QQ_MAIL")
 	if qqMail != "" {
@@ -138,6 +168,7 @@ func main() {
 		notifiers = append(notifiers, qqNotifier)
 		slog.Info("QQ notifier registered", "mail", qqMail)
 	}
+
 	notifyApp, err := notify.NewNotifyApp(notifiers)
 	if err != nil {
 		panic(fmt.Errorf("failed to init notify app: %w", err))

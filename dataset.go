@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"net/http"
@@ -15,15 +16,14 @@ func (a *DatasetApp) GetMux() *http.ServeMux {
 	return a.mux
 }
 
-func (a *DatasetApp) initDB(dbPath string) {
-	// Initialize the database
-}
+func NewDatasetApp(ctx context.Context, db *sql.DB) (*DatasetApp, error) {
+	// 验证数据库schema
 
-func NewDatasetApp(dbPath string) *DatasetApp {
 	mux := http.NewServeMux()
 	app := &DatasetApp{
 		mux: mux,
+		db:  db,
 	}
 	slog.Info("Dataset app initialized")
-	return app
+	return app, nil
 }

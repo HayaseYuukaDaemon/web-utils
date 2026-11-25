@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -26,31 +27,74 @@ func (a *VaultApp) GetMux() *http.ServeMux {
 	return a.mux
 }
 
-func (a *VaultApp) initDB(ctx context.Context, path string) error {
-	db, err := sql.Open("sqlite", path)
+func validateVaultSchema(ctx context.Context, db *sql.DB) error {
+	const table = "vault_configs"
+	if db == nil {
+		return fmt.Errorf("validate %s: nil database", table)
+	}
+
+	type column struct {
+		Name    string
+		Type    string
+		NotNull bool
+		PK      int // 0 表示非主键，1 表示主键中的第一列
+		Hidden  int // 0 表示普通列
+	}
+	want := []column{
+		{Name: "name", Type: "TEXT", PK: 1},
+		{Name: "platform", Type: "TEXT", NotNull: true},
+		{Name: "symbols", Type: "TEXT", NotNull: true},
+		{Name: "length", Type: "INTEGER", NotNull: true},
+	}
+
+	const query = `
+		SELECT x.name, upper(x.type), x."notnull", x.pk, x.hidden
+		FROM pragma_table_list AS t
+		CROSS JOIN pragma_table_xinfo(t.name, t.schema) AS x
+		WHERE t.schema = 'main' AND t.name = ? AND t.type = 'table'
+		ORDER BY x.cid`
+
+	rows, err := db.QueryContext(ctx, query, table)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect %s: %w", table, err)
 	}
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS vault_configs (
-			name TEXT PRIMARY KEY,
-			platform TEXT NOT NULL,
-			symbols TEXT NOT NULL,
-			length INTEGER NOT NULL
-		)`); err != nil {
-		return err
+	defer rows.Close()
+
+	i := 0
+	for rows.Next() {
+		var got column
+		if err := rows.Scan(&got.Name, &got.Type, &got.NotNull, &got.PK, &got.Hidden); err != nil {
+			return fmt.Errorf("read %s column %d: %w", table, i+1, err)
+		}
+		if i >= len(want) {
+			return fmt.Errorf("%s: unexpected column %q at position %d", table, got.Name, i+1)
+		}
+		if got != want[i] {
+			return fmt.Errorf("%s column %d: got %+v, want %+v", table, i+1, got, want[i])
+		}
+		i++
 	}
-	a.db = db
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate %s columns: %w", table, err)
+	}
+	if i == 0 {
+		return fmt.Errorf("expected an ordinary table named main.%s", table)
+	}
+	if i < len(want) {
+		return fmt.Errorf("%s: missing column %q at position %d", table, want[i].Name, i+1)
+	}
 	return nil
 }
 
-func NewVaultApp(dbPath string) *VaultApp {
+func NewVaultApp(ctx context.Context, db *sql.DB) (*VaultApp, error) {
+	if err := validateVaultSchema(ctx, db); err != nil {
+		return nil, err
+	}
+
 	mux := http.NewServeMux()
 	app := &VaultApp{
 		mux: mux,
-	}
-
-	if err := app.initDB(context.Background(), dbPath); err != nil {
-		panic(err)
+		db:  db,
 	}
 
 	mux.HandleFunc("GET /configs", func(w http.ResponseWriter, r *http.Request) {
@@ -67,10 +111,6 @@ func NewVaultApp(dbPath string) *VaultApp {
 			return
 		}
 		defer rows.Close()
-		if rows.Err() != nil {
-			http.Error(w, rows.Err().Error(), 500)
-			return
-		}
 		configs := map[string]VaultConfig{}
 		for rows.Next() {
 			var config VaultConfig
@@ -80,6 +120,10 @@ func NewVaultApp(dbPath string) *VaultApp {
 				return
 			}
 			configs[configName] = config
+		}
+		if rows.Err() != nil {
+			http.Error(w, rows.Err().Error(), 500)
+			return
 		}
 		writeJSON(w, 200, configs)
 	})
@@ -136,5 +180,5 @@ func NewVaultApp(dbPath string) *VaultApp {
 	})
 
 	slog.Info("Vault app initialized")
-	return app
+	return app, nil
 }
