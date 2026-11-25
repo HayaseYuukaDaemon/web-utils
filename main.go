@@ -122,9 +122,9 @@ func main() {
 		return
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	proxyApp := NewProxyApp(&http.Client{Transport: transport})
+	nonProxyTransport := http.DefaultTransport.(*http.Transport).Clone()
+	nonProxyTransport.Proxy = nil
+	proxyApp := NewProxyApp(&http.Client{Transport: nonProxyTransport})
 	vaultApp := NewVaultApp("vault.db")
 	datasetApp := NewDatasetApp("dataset.db")
 	var notifiers []notify.Notifier

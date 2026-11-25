@@ -61,17 +61,6 @@ func (n *notifierQQ) Notify(ctx context.Context, req NotifyRequest) error {
 	})
 	defer stop()
 
-	// 同时给连接设置截止时间。
-	deadline, _ := ctx.Deadline() // 上面的 WithTimeout 保证存在 deadline
-	if err := conn.SetDeadline(deadline); err != nil {
-		return err
-	}
-
-	// 限制后续 SMTP 操作的总耗时。
-	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		return err
-	}
-
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
 		return err
@@ -129,7 +118,7 @@ func (n *notifierQQ) Notify(ctx context.Context, req NotifyRequest) error {
 
 func NewQQNotifier(mail string, authCode string, instanceID string) *notifierQQ {
 	return &notifierQQ{
-		dialer: &net.Dialer{Timeout: 10 * time.Second},
+		dialer: &net.Dialer{},
 		instanceID: func() string {
 			if instanceID == "" {
 				return uuid.New().String()
