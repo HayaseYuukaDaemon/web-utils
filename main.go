@@ -51,14 +51,17 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 type Middleware struct {
 	mux       *http.ServeMux
-	authToken string
+	db        *sql.DB
+	rootToken string
 }
 
-func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if m.authToken == "" {
-		m.mux.ServeHTTP(w, r)
-		return
-	}
+func (m Middleware) BindRoutes() error {
+	return nil
+}
+
+type SubjectID struct{}
+
+func (m Middleware) auth(r *http.Request) (string, error) {
 	token := ""
 	reqAuthToken, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !found {
@@ -71,11 +74,54 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		token = reqAuthToken
 	}
-	if token != m.authToken {
-		http.Error(w, "Invalid authorization token", 401)
+
+	if token == m.rootToken {
+		return "root", nil
+	}
+
+	var subjectID string
+	err := m.db.QueryRowContext(r.Context(), "SELECT subject_id FROM auth_records WHERE token = ?", token).Scan(&subjectID)
+	if err != nil {
+		return "", fmt.Errorf("failed get auth record: %w", err)
+	}
+	return subjectID, nil
+}
+
+func (m Middleware) logRequest(subjectID string, r *http.Request) error {
+	authenticated := false
+	if subjectID != "" {
+		authenticated = true
+	}
+
+	_, err := m.db.ExecContext(r.Context(), `
+		INSERT INTO auth_logs (authenticated, identity, interface)
+		VALUES (?, ?, ?)`,
+		authenticated, subjectID, r.Method+" "+r.URL.EscapedPath(),
+	)
+	if err != nil {
+		slog.Error("write auth log", "error", err)
+		return fmt.Errorf("audit unavailable: %w", err)
+	}
+	return nil
+}
+
+func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if m.rootToken == "" {
+		m.mux.ServeHTTP(w, r)
 		return
 	}
-	m.mux.ServeHTTP(w, r)
+	subjectID, err := m.auth(r)
+	auditErr := m.logRequest(subjectID, r)
+	if auditErr != nil {
+		writeJSON(w, 500, map[string]string{"error": "audit error", "detail": auditErr.Error()})
+		return
+	}
+	if err != nil {
+		writeJSON(w, 401, map[string]string{"error": "unauthorized", "detail": err.Error()})
+		return
+	}
+	authCtx := context.WithValue(r.Context(), SubjectID{}, subjectID)
+	m.mux.ServeHTTP(w, r.WithContext(authCtx))
 }
 
 type UtilApp interface {
@@ -182,9 +228,10 @@ func main() {
 
 	middleware := Middleware{
 		mux: mux,
-		authToken: func() string {
-			if os.Getenv("AUTH_TOKEN") != "" {
-				return os.Getenv("AUTH_TOKEN")
+		db:  db,
+		rootToken: func() string {
+			if os.Getenv("ROOT_TOKEN") != "" {
+				return os.Getenv("ROOT_TOKEN")
 			}
 			return ""
 		}(),
