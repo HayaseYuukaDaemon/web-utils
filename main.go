@@ -213,7 +213,7 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if m.deployDomain != "" {
-			w.Header().Add("WWW-Authenticate", "Bearer resource_metadata=\"https://fanzha.hayaseyuuka.cn/.well-known/oauth-protected-resource/mcp\"")
+			w.Header().Add("WWW-Authenticate", fmt.Sprintf("Bearer resource_metadata=\"https://%s/.well-known/oauth-protected-resource/mcp\"", m.deployDomain))
 		}
 		writeJSON(w, 401, map[string]string{"error": "unauthorized", "detail": err.Error()})
 		return
@@ -345,7 +345,11 @@ func main() {
 
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server { return mcpServer },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
+		&mcp.StreamableHTTPOptions{
+			Stateless:                  true,
+			JSONResponse:               true,
+			DisableLocalhostProtection: true,
+		},
 	))
 
 	deployDomain := os.Getenv("DOMAIN")
