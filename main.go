@@ -40,11 +40,14 @@ func parseLogLevel(s string) (pterm.LogLevel, error) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.WriteHeader(status)
 	if value != nil {
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(value)
+	} else {
+		w.WriteHeader(status)
 	}
+
 }
 
 type Middleware struct {
@@ -60,6 +63,19 @@ func (m Middleware) BindRoutes() error {
 
 type SubjectID struct{}
 
+func (m Middleware) parseToken(ctx context.Context, token string) (string, error) {
+	if token == m.rootToken {
+		return "root", nil
+	}
+
+	var subjectID string
+	err := m.db.QueryRowContext(ctx, "SELECT subject_id FROM auth_records WHERE token = ?", token).Scan(&subjectID)
+	if err != nil {
+		return "", fmt.Errorf("failed get auth record: %w", err)
+	}
+	return subjectID, nil
+}
+
 func (m Middleware) auth(r *http.Request) (string, error) {
 	token := ""
 	reqAuthToken, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -73,17 +89,7 @@ func (m Middleware) auth(r *http.Request) (string, error) {
 	} else {
 		token = reqAuthToken
 	}
-
-	if token == m.rootToken {
-		return "root", nil
-	}
-
-	var subjectID string
-	err := m.db.QueryRowContext(r.Context(), "SELECT subject_id FROM auth_records WHERE token = ?", token).Scan(&subjectID)
-	if err != nil {
-		return "", fmt.Errorf("failed get auth record: %w", err)
-	}
-	return subjectID, nil
+	return m.parseToken(r.Context(), token)
 }
 
 func (m Middleware) logRequest(subjectID string, r *http.Request) error {
@@ -104,44 +110,97 @@ func (m Middleware) logRequest(subjectID string, r *http.Request) error {
 	return nil
 }
 
+func (m Middleware) handleWellKnown(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/.well-known/oauth-protected-resource/mcp":
+		writeJSON(w, 200, map[string]any{
+			"resource":              fmt.Sprintf("https://%s/mcp", m.deployDomain),
+			"authorization_servers": []string{"https://" + m.deployDomain},
+		})
+	case "/.well-known/oauth-authorization-server":
+		writeJSON(w, 200, map[string]any{
+			"issuer":                                "https://" + m.deployDomain,
+			"authorization_endpoint":                fmt.Sprintf("https://%s/oauth/authorize", m.deployDomain),
+			"token_endpoint":                        fmt.Sprintf("https://%s/oauth/token", m.deployDomain),
+			"response_types_supported":              []string{"code"},
+			"grant_types_supported":                 []string{"authorization_code"},
+			"code_challenge_methods_supported":      []string{"S256"},
+			"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
+		})
+	default:
+		w.WriteHeader(404)
+	}
+}
+
+func (m Middleware) cors(w http.ResponseWriter, r *http.Request) {
+	headers := w.Header()
+	headers.Add("Vary", "Origin")
+	headers.Add("Vary", "Access-Control-Request-Method")
+	headers.Add("Vary", "Access-Control-Request-Headers")
+	if method := r.Header.Get("Access-Control-Request-Method"); method != "" && r.Header.Get("Origin") != "" {
+		headers.Set("Access-Control-Allow-Methods", method)
+		if requestedHeaders := r.Header.Get("Access-Control-Request-Headers"); requestedHeaders != "" {
+			headers.Set("Access-Control-Allow-Headers", requestedHeaders)
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+}
+
+func (m Middleware) oauth(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet {
+		if r.URL.Path == "/oauth/authorize" {
+			query := r.URL.Query()
+			state := query.Get("state")
+			redirectURI := query.Get("redirect_uri")
+			fmt.Fprintf(w, "fill the code with your token by yourself, and go to %s?state=%s&code=<YOUR_TOKEN>", redirectURI, state)
+			return true
+		}
+	}
+	if r.Method == http.MethodPost {
+		if r.URL.Path == "/oauth/token" {
+			err := r.ParseForm()
+			if err != nil {
+				writeJSON(w, 400, map[string]string{"error": "failed to parse form: " + err.Error()})
+				return true
+			}
+			code := r.PostFormValue("code")
+			_, err = m.parseToken(r.Context(), code)
+			if err != nil {
+				writeJSON(w, 401, map[string]string{"error": "unauthorize: " + err.Error()})
+				return true
+			}
+			writeJSON(w, 200, map[string]string{"access_token": code, "token_type": "Bearer"})
+			return true
+		}
+	}
+	return false
+}
+
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	headers := w.Header()
 	headers.Set("Access-Control-Allow-Origin", "*")
 	headers.Set("Access-Control-Expose-Headers", "*")
+
+	// 处理 CORS
 	if r.Method == http.MethodOptions {
-		headers.Add("Vary", "Origin")
-		headers.Add("Vary", "Access-Control-Request-Method")
-		headers.Add("Vary", "Access-Control-Request-Headers")
-		if method := r.Header.Get("Access-Control-Request-Method"); method != "" && r.Header.Get("Origin") != "" {
-			headers.Set("Access-Control-Allow-Methods", method)
-			if requestedHeaders := r.Header.Get("Access-Control-Request-Headers"); requestedHeaders != "" {
-				headers.Set("Access-Control-Allow-Headers", requestedHeaders)
-			}
-			w.WriteHeader(http.StatusNoContent)
+		m.cors(w, r)
+	}
+
+	if m.deployDomain != "" {
+		// 处理 /.well-known 端点
+		if strings.HasPrefix(r.URL.Path, "/.well-known/") {
+			m.handleWellKnown(w, r)
+			return
+		}
+
+		// 兼容 oauth 认证
+		if m.oauth(w, r) {
 			return
 		}
 	}
 
-	if strings.HasPrefix(r.URL.Path, "/.well-known/") {
-		switch r.URL.Path {
-		case "/.well-known/oauth-protected-resource/api/mcp":
-		case "/.well-known/oauth-authorization-server":
-			// 这里期望由 nginx 等 gateway 剥离 /api/ 前缀
-			writeJSON(w, 200, map[string]any{
-				"issuer":                                "https://" + m.deployDomain,
-				"authorization_endpoint":                fmt.Sprintf("https://%s/api/oauth/authorize", m.deployDomain),
-				"token_endpoint":                        "https://fanzha.hayaseyuuka.cn/api/oauth/token",
-				"response_types_supported":              []string{"code"},
-				"grant_types_supported":                 []string{"authorization_code"},
-				"code_challenge_methods_supported":      []string{"S256"},
-				"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
-			})
-		default:
-			w.WriteHeader(404)
-		}
-		return
-	}
-
+	// 认证
 	if m.rootToken == "" {
 		m.mux.ServeHTTP(w, r)
 		return
@@ -153,6 +212,9 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		if m.deployDomain != "" {
+			w.Header().Add("WWW-Authenticate", "Bearer resource_metadata=\"https://fanzha.hayaseyuuka.cn/.well-known/oauth-protected-resource/mcp\"")
+		}
 		writeJSON(w, 401, map[string]string{"error": "unauthorized", "detail": err.Error()})
 		return
 	}
@@ -273,6 +335,11 @@ func main() {
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
 	))
 
+	deployDomain := os.Getenv("DOMAIN")
+	if deployDomain == "" {
+		slog.Warn("no deploy domain, disable oauth")
+	}
+
 	middleware := Middleware{
 		mux: mux,
 		db:  db,
@@ -282,6 +349,7 @@ func main() {
 			}
 			return ""
 		}(),
+		deployDomain: deployDomain,
 	}
 
 	server := &http.Server{
