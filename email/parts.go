@@ -26,11 +26,45 @@ type partInfo struct {
 	Filename    string `json:"filename,omitempty"`
 	EncodedSize uint32 `json:"encoded_size"`
 	path        []int
-	mime        *imap.BodyStructureSinglePart
+	header      message.Header
+	attachment  bool
 }
 
-func describeParts(structure imap.BodyStructure) (body *partInfo, attachments []partInfo) {
-	structure.Walk(func(path []int, part imap.BodyStructure) bool {
+func (p *partInfo) classify(disposition string) {
+	p.attachment = p.Filename != "" || strings.EqualFold(disposition, "attachment") || (p.Type != "text/plain" && p.Type != "text/html")
+}
+
+func (p *partInfo) preferredTo(selected *partInfo) bool {
+	return selected == nil || (p.Type == "text/plain" && selected.Type == "text/html")
+}
+
+var errBodyStructure = errors.New("unusable IMAP BODYSTRUCTURE")
+
+type partVisitor func(*partInfo, io.Reader) error
+type partSource func(*imapclient.Client, messageRef, partVisitor) (summary, error)
+
+func imapParts(c *imapclient.Client, ref messageRef, visit partVisitor) (summary, error) {
+	if err := ref.selectFolder(c, true); err != nil {
+		return summary{}, err
+	}
+	m, err := ref.fetch(c, &imap.FetchOptions{Envelope: true, Flags: true, BodyStructure: &imap.FetchItemBodyStructure{Extended: true}})
+	if err != nil {
+		// go-imap's wire syntax error type is internal. Only retry a malformed
+		// FETCH response, never a missing UID, IMAP NO/BAD or transport error.
+		if strings.HasPrefix(err.Error(), "in response-data:") && strings.Contains(err.Error(), "imapwire:") {
+			return summary{}, fmt.Errorf("%w: %w", errBodyStructure, err)
+		}
+		return summary{}, err
+	}
+	if m.BodyStructure == nil {
+		return summary{}, errBodyStructure
+	}
+	if m.Envelope == nil {
+		return summary{}, errors.New("server omitted message envelope")
+	}
+	var body *partInfo
+	var parts []*partInfo
+	m.BodyStructure.Walk(func(path []int, part imap.BodyStructure) bool {
 		single, ok := part.(*imap.BodyStructureSinglePart)
 		if !ok {
 			return true
@@ -39,28 +73,30 @@ func describeParts(structure imap.BodyStructure) (body *partInfo, attachments []
 		for i, n := range path {
 			ids[i] = strconv.Itoa(n)
 		}
-		p := partInfo{ID: strings.Join(ids, "."), Type: single.MediaType(), Filename: single.Filename(),
-			EncodedSize: single.Size, path: slices.Clone(path), mime: single}
-		disp := single.Disposition()
-		if p.Filename != "" || (disp != nil && strings.EqualFold(disp.Value, "attachment")) || (p.Type != "text/plain" && p.Type != "text/html") {
-			attachments = append(attachments, p)
-		} else if body == nil || (p.Type == "text/plain" && body.Type == "text/html") {
-			body = &p
+		p := &partInfo{ID: strings.Join(ids, "."), Type: single.MediaType(), Filename: single.Filename(), EncodedSize: single.Size, path: slices.Clone(path)}
+		p.header.SetContentType(p.Type, single.Params)
+		p.header.Set("Content-Transfer-Encoding", single.Encoding)
+		var disposition string
+		if disp := single.Disposition(); disp != nil {
+			disposition = disp.Value
+		}
+		p.classify(disposition)
+		if p.attachment {
+			parts = append(parts, p)
+		} else if p.preferredTo(body) {
+			body = p
 		}
 		return false
 	})
-	return body, attachments
-}
-
-func loadStructure(c *imapclient.Client, ref messageRef) (*imapclient.FetchMessageBuffer, error) {
-	if err := ref.selectFolder(c, true); err != nil {
-		return nil, err
+	if body != nil {
+		parts = append(parts, body)
 	}
-	m, err := ref.fetch(c, &imap.FetchOptions{Envelope: true, Flags: true, BodyStructure: &imap.FetchItemBodyStructure{Extended: true}})
-	if err == nil && (m.Envelope == nil || m.BodyStructure == nil) {
-		return nil, errors.New("server omitted message metadata")
+	for _, p := range parts {
+		if err := visit(p, &sectionReader{client: c, ref: ref, path: p.path}); err != nil {
+			return summary{}, err
+		}
 	}
-	return m, err
+	return summarize(m), nil
 }
 
 // sectionReader fetches the transfer-encoded part in ranges so even a large
@@ -101,15 +137,13 @@ func (r *sectionReader) Read(dest []byte) (int, error) {
 }
 
 // Only body text is transcoded. Text attachments retain their original bytes.
-func readPart(c *imapclient.Client, ref messageRef, p *partInfo, isBody bool, offset, limit int64) ([]byte, bool, error) {
-	var h message.Header
-	if isBody {
-		h.SetContentType(p.Type, p.mime.Params)
-	} else {
+func readPart(r io.Reader, p *partInfo, offset, limit int64) ([]byte, bool, error) {
+	h := p.header
+	if p.attachment {
+		h = h.Copy()
 		h.SetContentType("application/octet-stream", nil)
 	}
-	h.Set("Content-Transfer-Encoding", p.mime.Encoding)
-	entity, err := message.New(h, &sectionReader{client: c, ref: ref, path: p.path})
+	entity, err := message.New(h, r)
 	if err != nil {
 		return nil, false, err
 	}
@@ -125,7 +159,7 @@ func readPart(c *imapclient.Client, ref messageRef, p *partInfo, isBody bool, of
 	if int64(len(data)) <= limit {
 		return data, false, nil
 	}
-	if isBody {
+	if !p.attachment {
 		// Keep the final UTF-8 character intact across body pages.
 		for end := limit; end > max(0, limit-utf8.UTFMax); end-- {
 			if utf8.RuneStart(data[end]) {
@@ -144,34 +178,40 @@ type readInput struct {
 
 type mailContent struct {
 	summary
-	Body        string     `json:"body"`
-	BodyType    string     `json:"body_type,omitempty"`
-	NextOffset  int64      `json:"next_offset,omitempty" jsonschema:"Pass as offset to continue reading the body when present."`
-	Attachments []partInfo `json:"attachments,omitempty"`
+	Body        string      `json:"body"`
+	BodyType    string      `json:"body_type,omitempty"`
+	NextOffset  int64       `json:"next_offset,omitempty" jsonschema:"Pass as offset to continue reading the body when present."`
+	Attachments []*partInfo `json:"attachments,omitempty"`
 }
 
-func readMail(c *imapclient.Client, in readInput) (mailContent, error) {
+func (parts partSource) readMail(c *imapclient.Client, in readInput) (mailContent, error) {
 	if in.Offset < 0 {
 		return mailContent{}, errors.New("offset must be non-negative")
 	}
-	ref := in.messageRef
-	m, err := loadStructure(c, ref)
+	var out mailContent
+	var body *partInfo
+	var bodyErr error
+	meta, err := parts(c, in.messageRef, func(p *partInfo, r io.Reader) error {
+		if p.attachment {
+			out.Attachments = append(out.Attachments, p)
+		} else if p.preferredTo(body) {
+			// A plain-text alternative later in the stream supersedes HTML,
+			// even if this offset was beyond the shorter HTML version.
+			body = p
+			data, more, err := readPart(r, p, in.Offset, bodyLimit)
+			bodyErr = err
+			out.Body, out.BodyType, out.NextOffset = string(data), p.Type, 0
+			if more {
+				out.NextOffset = in.Offset + int64(len(data))
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return mailContent{}, err
 	}
-	body, attachments := describeParts(m.BodyStructure)
-	out := mailContent{summary: summarize(m), Attachments: attachments}
-	if body != nil {
-		data, more, err := readPart(c, ref, body, true, in.Offset, bodyLimit)
-		if err != nil {
-			return out, err
-		}
-		out.Body, out.BodyType = string(data), body.Type
-		if more {
-			out.NextOffset = in.Offset + int64(len(data))
-		}
-	}
-	return out, nil
+	out.summary = meta
+	return out, bodyErr
 }
 
 type attachmentInput struct {
@@ -186,30 +226,36 @@ type attachmentContent struct {
 	NextOffset int64  `json:"next_offset,omitempty" jsonschema:"Pass as offset to read the next page when present."`
 }
 
-func getAttachment(c *imapclient.Client, in attachmentInput) (attachmentContent, error) {
+func (parts partSource) getAttachment(c *imapclient.Client, in attachmentInput) (attachmentContent, error) {
 	if in.Offset < 0 || in.Limit < 0 || in.Limit > attachmentPage {
 		return attachmentContent{}, errors.New("invalid attachment offset or limit")
 	}
 	if in.Limit == 0 {
 		in.Limit = attachmentPage
 	}
-	m, err := loadStructure(c, in.messageRef)
+	var matched *partInfo
+	var out attachmentContent
+	_, err := parts(c, in.messageRef, func(p *partInfo, r io.Reader) error {
+		if !p.attachment || p.ID != in.ID {
+			return nil
+		}
+		matched = p
+		data, more, err := readPart(r, p, in.Offset, in.Limit)
+		if err != nil {
+			return err
+		}
+		out.Data = base64.StdEncoding.EncodeToString(data)
+		if more {
+			out.NextOffset = in.Offset + int64(len(data))
+		}
+		return nil
+	})
 	if err != nil {
 		return attachmentContent{}, err
 	}
-	_, attachments := describeParts(m.BodyStructure)
-	for _, p := range attachments {
-		if p.ID == in.ID {
-			data, more, err := readPart(c, in.messageRef, &p, false, in.Offset, in.Limit)
-			if err != nil {
-				return attachmentContent{}, err
-			}
-			out := attachmentContent{partInfo: p, Data: base64.StdEncoding.EncodeToString(data)}
-			if more {
-				out.NextOffset = in.Offset + int64(len(data))
-			}
-			return out, nil
-		}
+	if matched == nil {
+		return attachmentContent{}, fmt.Errorf("attachment %q not found", in.ID)
 	}
-	return attachmentContent{}, fmt.Errorf("attachment %q not found", in.ID)
+	out.partInfo = *matched
+	return out, nil
 }

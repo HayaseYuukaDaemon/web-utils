@@ -82,30 +82,43 @@ func (a *App) connect(ctx context.Context, updates *imapclient.UnilateralDataHan
 	return c, closeClient, nil
 }
 
+type mailTool[I, O any] func(*imapclient.Client, I) (O, error)
+
 // Each call owns its connection and selected mailbox, independently of IDLE.
-func addTool[I, O any](a *App, m *mcp.Server, name, description string, readOnly bool, run func(*imapclient.Client, I) (O, error)) {
+func addTool[I, O any](a *App, m *mcp.Server, name, description string, readOnly bool, run, rawFallback mailTool[I, O]) {
 	mcp.AddTool(m, &mcp.Tool{Name: name, Description: description, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in I) (*mcp.CallToolResult, O, error) {
 			ctx, cancel := context.WithTimeout(ctx, time.Minute)
 			defer cancel()
-			c, closeClient, err := a.connect(ctx, nil)
-			if err != nil {
-				var zero O
-				return nil, zero, err
+			call := func(f mailTool[I, O]) (O, error) {
+				c, closeClient, err := a.connect(ctx, nil)
+				if err != nil {
+					var zero O
+					return zero, err
+				}
+				defer closeClient()
+				return f(c, in)
 			}
-			defer closeClient()
-			out, err := run(c, in)
+			out, err := call(run)
+			if rawFallback != nil && errors.Is(err, errBodyStructure) && ctx.Err() == nil {
+				// The wire decoder closes its connection on a syntax error.
+				out, err = call(rawFallback)
+				if err != nil {
+					err = fmt.Errorf("raw message fallback: %w", err)
+				}
+			}
 			return nil, out, err
 		})
 }
 
 func (a *App) RegisterMCPTools(m *mcp.Server) error {
-	addTool(a, m, "mail_list_folders", "List IMAP folders and their attributes.", true, listFolders)
-	addTool(a, m, "mail_list_unread", "List unread messages, newest UID first.", true, listUnread)
-	addTool(a, m, "mail_search", "Search message headers and body for text, newest UID first.", true, searchMail)
-	addTool(a, m, "mail_read", "Read a message and list attachment IDs, preserving unread state. Continue the body with next_offset when present.", true, readMail)
-	addTool(a, m, "mail_mark_read", "Mark a message as read, preserving other flags.", false, markRead)
-	addTool(a, m, "mail_get_attachment", "Get attachment bytes as base64, preserving unread state. Continue with next_offset when present.", true, getAttachment)
+	structured, raw := partSource(imapParts), partSource(rawParts)
+	addTool(a, m, "mail_list_folders", "List IMAP folders and their attributes.", true, listFolders, nil)
+	addTool(a, m, "mail_list_unread", "List unread messages, newest UID first.", true, listUnread, nil)
+	addTool(a, m, "mail_search", "Search message headers and body for text, newest UID first.", true, searchMail, nil)
+	addTool(a, m, "mail_read", "Read a message and list attachment IDs, preserving unread state. Continue the body with next_offset when present.", true, structured.readMail, raw.readMail)
+	addTool(a, m, "mail_mark_read", "Mark a message as read, preserving other flags.", false, markRead, nil)
+	addTool(a, m, "mail_get_attachment", "Get attachment bytes as base64, preserving unread state. Continue with next_offset when present.", true, structured.getAttachment, raw.getAttachment)
 	return nil
 }
 

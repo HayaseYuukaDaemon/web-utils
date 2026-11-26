@@ -36,7 +36,21 @@ func (s idleSession) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) erro
 	return s.Session.Idle(w, stop)
 }
 
-func testMailbox(t *testing.T) (*App, *imapmemserver.User, <-chan struct{}) {
+type malformedStructureSession struct {
+	imapserver.Session
+	conn net.Conn
+}
+
+func (s malformedStructureSession) Fetch(w *imapserver.FetchWriter, set imap.NumSet, opts *imap.FetchOptions) error {
+	if opts.BodyStructure != nil {
+		// Same invalid media type as QQ Mail. go-imap drops this connection.
+		_, err := fmt.Fprintf(s.conn, "* 1 FETCH (UID %s BODYSTRUCTURE (NIL NIL NIL NIL NIL NIL 0))\r\n", set.String())
+		return err
+	}
+	return s.Session.Fetch(w, set, opts)
+}
+
+func testMailbox(t *testing.T, malformedStructure bool) (*App, *imapmemserver.User, <-chan struct{}) {
 	t.Helper()
 	// Reuse the loopback TLS certificate and its trust store.
 	cert := httptest.NewTLSServer(nil)
@@ -52,8 +66,12 @@ func testMailbox(t *testing.T) (*App, *imapmemserver.User, <-chan struct{}) {
 	mem := imapmemserver.New()
 	mem.AddUser(user)
 	idling := make(chan struct{}, 1)
-	server := imapserver.New(&imapserver.Options{NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
-		return idleSession{mem.NewSession(), idling}, nil, nil
+	server := imapserver.New(&imapserver.Options{NewSession: func(conn *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
+		var sess imapserver.Session = idleSession{mem.NewSession(), idling}
+		if malformedStructure {
+			sess = malformedStructureSession{sess, conn.NetConn()}
+		}
+		return sess, nil, nil
 	}})
 	go server.Serve(tls.NewListener(ln, cert.TLS))
 	t.Cleanup(func() { server.Close() })
@@ -133,7 +151,12 @@ func appendMessage(t *testing.T, user *imapmemserver.User, raw string) *imap.App
 }
 
 func TestMailTools(t *testing.T) {
-	app, user, _ := testMailbox(t)
+	t.Run("bodystructure", func(t *testing.T) { testMailTools(t, false) })
+	t.Run("raw fallback", func(t *testing.T) { testMailTools(t, true) })
+}
+
+func testMailTools(t *testing.T, malformedStructure bool) {
+	app, user, _ := testMailbox(t, malformedStructure)
 	appendMessage(t, user, "Subject: earlier\n\nsample")
 	msg := appendMessage(t, user, `From: Sender <from@example.org>
 Subject: example
@@ -141,12 +164,20 @@ MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary=x
 
 --x
+Content-Type: multipart/alternative; boundary=y
+
+--y
+Content-Type: text/html
+
+<p>HTML alternative</p>
+--y
 Content-Type: text/plain; charset=iso-8859-1
 Content-Transfer-Encoding: quoted-printable
 
 caf=E9
+--y--
 --x
-Content-Type: application/octet-stream
+Content-Type: text/plain; charset=iso-8859-1
 Content-Disposition: attachment; filename="test.bin"
 Content-Transfer-Encoding: base64
 
@@ -206,7 +237,7 @@ AP8=
 	ref := messageRef{Folder: results.Folder, UIDValidity: results.UIDValidity, UID: msg.UID}
 	var content mailContent
 	call("mail_read", ref, &content)
-	if strings.TrimSpace(content.Body) != "café" || len(content.Attachments) != 1 || content.Attachments[0].Filename != "test.bin" {
+	if strings.TrimSpace(content.Body) != "café" || len(content.Attachments) != 1 || content.Attachments[0].Filename != "test.bin" || content.Attachments[0].EncodedSize != 4 || content.Attachments[0].ID != "2" {
 		t.Fatal(content)
 	}
 	var attachment attachmentContent
@@ -251,7 +282,7 @@ AP8=
 }
 
 func TestBodyPaging(t *testing.T) {
-	app, user, _ := testMailbox(t)
+	app, user, _ := testMailbox(t, false)
 	prefix := strings.Repeat("x", bodyLimit-1)
 	msg := appendMessage(t, user, "Subject: large body\nContent-Type: text/plain; charset=utf-8\n\n"+prefix+"邮件")
 	c, closeClient, err := app.connect(t.Context(), nil)
@@ -259,26 +290,45 @@ func TestBodyPaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeClient()
-	in := readInput{messageRef: messageRef{UID: msg.UID, UIDValidity: msg.UIDValidity}}
-	out, err := readMail(c, in)
-	if err != nil {
-		t.Fatal(err)
+	for name, parts := range map[string]partSource{"bodystructure": imapParts, "raw": rawParts} {
+		t.Run(name, func(t *testing.T) {
+			in := readInput{messageRef: messageRef{UID: msg.UID, UIDValidity: msg.UIDValidity}}
+			out, err := parts.readMail(c, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Body != prefix || out.NextOffset != int64(len(prefix)) {
+				t.Fatalf("invalid first page: length %d, offset %d", len(out.Body), out.NextOffset)
+			}
+			in.Offset = out.NextOffset
+			out, err = parts.readMail(c, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Body != "邮件" || out.NextOffset != 0 {
+				t.Fatalf("invalid last page: %q, offset %d", out.Body, out.NextOffset)
+			}
+		})
 	}
-	if out.Body != prefix || out.NextOffset != int64(len(prefix)) {
-		t.Fatalf("invalid first page: length %d, offset %d", len(out.Body), out.NextOffset)
-	}
-	in.Offset = out.NextOffset
-	out, err = readMail(c, in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Body != "邮件" || out.NextOffset != 0 {
-		t.Fatalf("invalid last page: %q, offset %d", out.Body, out.NextOffset)
+}
+
+func TestRawHeaderMissingSeparator(t *testing.T) {
+	const headers = "Subject: folded\r\n subject\r\nFrom: sender@example.org\r\n"
+	for _, body := range []string{"first line\r\nsecond line", strings.Repeat("x", 300000), "邮件\r\n", ""} {
+		h, r, err := readRawHeader(strings.NewReader(headers + body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(r)
+		subject, _ := h.Subject()
+		if err != nil || string(got) != body || subject != "folded subject" {
+			t.Fatalf("header/body split: got subject %q and %d bytes, err %v", subject, len(got), err)
+		}
 	}
 }
 
 func TestInboxIdleAndReconnect(t *testing.T) {
-	app, user, idling := testMailbox(t)
+	app, user, idling := testMailbox(t, false)
 	appendMessage(t, user, "Subject: historical\n\nold")
 	var cursor inboxCursor
 	events := make(chan imap.UID, 4)
