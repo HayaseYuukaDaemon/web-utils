@@ -223,7 +223,9 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type UtilApp interface {
+	AppName() string
 	GetMux() *http.ServeMux
+	RegisterMCPTools(m *mcp.Server) error
 }
 
 //go:embed schema.sql
@@ -293,17 +295,23 @@ func main() {
 		panic(fmt.Errorf("failed to init db: %w", err))
 	}
 
-	proxyApp := NewProxyApp(&http.Client{Transport: nonProxyTransport})
+	apps := []UtilApp{}
+
+	apps = append(apps, NewProxyApp(&http.Client{Transport: nonProxyTransport}))
 
 	vaultApp, err := NewVaultApp(initCtx, db)
 	if err != nil {
 		panic(fmt.Errorf("failed to init vault app: %w", err))
 	}
 
+	apps = append(apps, vaultApp)
+
 	datasetApp, err := NewDatasetApp(initCtx, db)
 	if err != nil {
 		panic(fmt.Errorf("failed to init dataset app: %w", err))
 	}
+
+	apps = append(apps, datasetApp)
 
 	var notifiers []notify.Notifier
 	qqMail := os.Getenv("QQ_MAIL")
@@ -322,16 +330,21 @@ func main() {
 		panic(fmt.Errorf("failed to init notify app: %w", err))
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/proxy/", http.StripPrefix("/proxy", proxyApp.GetMux()))
-	mux.Handle("/vault/", http.StripPrefix("/vault", vaultApp.GetMux()))
-	mux.Handle("/dataset/", http.StripPrefix("/dataset", datasetApp.GetMux()))
-	mux.Handle("/notify/", http.StripPrefix("/notify", notifyApp.GetMux()))
+	apps = append(apps, notifyApp)
 
-	mcpApp := mcp.NewServer(&mcp.Implementation{Name: "web-utils", Version: "0.0.1"}, nil)
+	mux := http.NewServeMux()
+
+	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "web-utils", Version: "0.0.1"}, nil)
+
+	for _, app := range apps {
+		if err := app.RegisterMCPTools(mcpServer); err != nil {
+			panic(fmt.Errorf("failed to register mcp tool: %w", err))
+		}
+		mux.Handle(fmt.Sprintf("/%s/", app.AppName()), http.StripPrefix("/"+app.AppName(), app.GetMux()))
+	}
 
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
-		func(r *http.Request) *mcp.Server { return mcpApp },
+		func(r *http.Request) *mcp.Server { return mcpServer },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
 	))
 

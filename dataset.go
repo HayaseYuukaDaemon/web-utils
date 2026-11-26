@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type DatasetApp struct {
@@ -14,6 +16,14 @@ type DatasetApp struct {
 
 func (a *DatasetApp) GetMux() *http.ServeMux {
 	return a.mux
+}
+
+func (a *DatasetApp) AppName() string {
+	return "dataset"
+}
+
+func (a *DatasetApp) RegisterMCPTools(m *mcp.Server) error {
+	return nil
 }
 
 func NewDatasetApp(ctx context.Context, db *sql.DB) (*DatasetApp, error) {

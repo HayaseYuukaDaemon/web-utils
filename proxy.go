@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -301,8 +302,16 @@ func (a *ProxyApp) getJWTToken(ctx context.Context, account, password string) (s
 	return serverResp.Data.AuthData, nil
 }
 
+func (a *ProxyApp) AppName() string {
+	return "proxy"
+}
+
 func (a *ProxyApp) GetMux() *http.ServeMux {
 	return a.mux
+}
+
+func (a *ProxyApp) RegisterMCPTools(m *mcp.Server) error {
+	return nil
 }
 
 func NewProxyApp(client *http.Client) *ProxyApp {

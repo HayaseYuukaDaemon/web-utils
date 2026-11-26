@@ -9,6 +9,7 @@ import (
 
 	"database/sql"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	_ "modernc.org/sqlite"
 )
 
@@ -25,6 +26,10 @@ type VaultConfig struct {
 
 func (a *VaultApp) GetMux() *http.ServeMux {
 	return a.mux
+}
+
+func (a *VaultApp) AppName() string {
+	return "vault"
 }
 
 func validateVaultSchema(ctx context.Context, db *sql.DB) error {
@@ -83,6 +88,10 @@ func validateVaultSchema(ctx context.Context, db *sql.DB) error {
 	if i < len(want) {
 		return fmt.Errorf("%s: missing column %q at position %d", table, want[i].Name, i+1)
 	}
+	return nil
+}
+
+func (a *VaultApp) RegisterMCPTools(m *mcp.Server) error {
 	return nil
 }
 

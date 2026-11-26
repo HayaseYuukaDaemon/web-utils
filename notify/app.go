@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type NotifyApp struct {
@@ -31,6 +33,14 @@ type Notifier interface {
 
 func (a *NotifyApp) GetMux() *http.ServeMux {
 	return a.mux
+}
+
+func (a *NotifyApp) AppName() string {
+	return "notify"
+}
+
+func (a *NotifyApp) RegisterMCPTools(m *mcp.Server) error {
+	return nil
 }
 
 func (a *NotifyApp) RegisterNotifier[NC Notifier](nc NC) error {
