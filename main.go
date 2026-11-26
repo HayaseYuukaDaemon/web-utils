@@ -40,9 +40,6 @@ func parseLogLevel(s string) (pterm.LogLevel, error) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	w.WriteHeader(status)
 	if value != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -51,9 +48,10 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 type Middleware struct {
-	mux       *http.ServeMux
-	db        *sql.DB
-	rootToken string
+	mux          *http.ServeMux
+	db           *sql.DB
+	rootToken    string
+	deployDomain string
 }
 
 func (m Middleware) BindRoutes() error {
@@ -107,8 +105,40 @@ func (m Middleware) logRequest(subjectID string, r *http.Request) error {
 }
 
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/static") {
-		http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))).ServeHTTP(w, r)
+	headers := w.Header()
+	headers.Set("Access-Control-Allow-Origin", "*")
+	headers.Set("Access-Control-Expose-Headers", "*")
+	if r.Method == http.MethodOptions {
+		headers.Add("Vary", "Origin")
+		headers.Add("Vary", "Access-Control-Request-Method")
+		headers.Add("Vary", "Access-Control-Request-Headers")
+		if method := r.Header.Get("Access-Control-Request-Method"); method != "" && r.Header.Get("Origin") != "" {
+			headers.Set("Access-Control-Allow-Methods", method)
+			if requestedHeaders := r.Header.Get("Access-Control-Request-Headers"); requestedHeaders != "" {
+				headers.Set("Access-Control-Allow-Headers", requestedHeaders)
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/.well-known/") {
+		switch r.URL.Path {
+		case "/.well-known/oauth-protected-resource/api/mcp":
+		case "/.well-known/oauth-authorization-server":
+			// 这里期望由 nginx 等 gateway 剥离 /api/ 前缀
+			writeJSON(w, 200, map[string]any{
+				"issuer":                                "https://" + m.deployDomain,
+				"authorization_endpoint":                fmt.Sprintf("https://%s/api/oauth/authorize", m.deployDomain),
+				"token_endpoint":                        "https://fanzha.hayaseyuuka.cn/api/oauth/token",
+				"response_types_supported":              []string{"code"},
+				"grant_types_supported":                 []string{"authorization_code"},
+				"code_challenge_methods_supported":      []string{"S256"},
+				"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
+			})
+		default:
+			w.WriteHeader(404)
+		}
 		return
 	}
 
