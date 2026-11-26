@@ -13,8 +13,10 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+	"web-utils/email"
 	"web-utils/notify"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -223,9 +225,9 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type UtilApp interface {
+	RegisterMCPTools(m *mcp.Server) error
 	AppName() string
 	GetMux() *http.ServeMux
-	RegisterMCPTools(m *mcp.Server) error
 }
 
 //go:embed schema.sql
@@ -332,6 +334,14 @@ func main() {
 
 	apps = append(apps, notifyApp)
 
+	mailApp, err := email.FromEnv()
+	if err != nil {
+		panic(fmt.Errorf("failed to init email app: %w", err))
+	}
+	if mailApp != nil {
+		apps = append(apps, mailApp)
+	}
+
 	mux := http.NewServeMux()
 
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "web-utils", Version: "0.0.1"}, nil)
@@ -340,7 +350,10 @@ func main() {
 		if err := app.RegisterMCPTools(mcpServer); err != nil {
 			panic(fmt.Errorf("failed to register mcp tool: %w", err))
 		}
-		mux.Handle(fmt.Sprintf("/%s/", app.AppName()), http.StripPrefix("/"+app.AppName(), app.GetMux()))
+		appMux := app.GetMux()
+		if appMux != nil {
+			mux.Handle(fmt.Sprintf("/%s/", app.AppName()), http.StripPrefix("/"+app.AppName(), appMux))
+		}
 	}
 
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
@@ -383,6 +396,12 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	var bgTasks sync.WaitGroup
+	if mailApp != nil {
+		bgTasks.Go(func() { mailApp.Watch(ctx) })
+	}
+	defer bgTasks.Wait()
 
 	go func() {
 		slog.Info("service listening", "addr", server.Addr)
