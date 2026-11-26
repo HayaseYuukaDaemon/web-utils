@@ -142,6 +142,10 @@ func main() {
 	slog.Debug("Debug start")
 	slog.Info("Start")
 
+	if os.Getenv("ROOT_TOKEN") == "" {
+		slog.Warn("no root token, allow all requests")
+	}
+
 	if len(os.Args) > 1 {
 		if slices.Contains(os.Args, "test-cia") {
 			var c yaml.Node
