@@ -17,6 +17,7 @@ import (
 	"time"
 	"web-utils/notify"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pterm/pterm"
 	"gopkg.in/yaml.v3"
 
@@ -106,6 +107,11 @@ func (m Middleware) logRequest(subjectID string, r *http.Request) error {
 }
 
 func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/static") {
+		http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))).ServeHTTP(w, r)
+		return
+	}
+
 	if m.rootToken == "" {
 		m.mux.ServeHTTP(w, r)
 		return
@@ -229,6 +235,13 @@ func main() {
 	mux.Handle("/vault/", http.StripPrefix("/vault", vaultApp.GetMux()))
 	mux.Handle("/dataset/", http.StripPrefix("/dataset", datasetApp.GetMux()))
 	mux.Handle("/notify/", http.StripPrefix("/notify", notifyApp.GetMux()))
+
+	mcpApp := mcp.NewServer(&mcp.Implementation{Name: "web-utils", Version: "0.0.1"}, nil)
+
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
+		func(r *http.Request) *mcp.Server { return mcpApp },
+		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
+	))
 
 	middleware := Middleware{
 		mux: mux,
