@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -31,10 +33,12 @@ func FromEnv() (*App, error) {
 	if err != nil || host == "" || port == "" || user == "" || pass == "" {
 		return nil, errors.New("set IMAP_ADDR (host:port), IMAP_USERNAME and IMAP_PASSWORD together")
 	}
-	return &App{addr: addr, username: user, password: pass, dialer: tls.Dialer{
+	app := &App{addr: addr, username: user, password: pass, dialer: tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: 15 * time.Second},
 		Config:    &tls.Config{MinVersion: tls.VersionTLS12},
-	}}, nil
+	}}
+	slog.Info("Email app initialized", "addr", addr)
+	return app, nil
 }
 
 func (a *App) AppName() string {
@@ -45,10 +49,18 @@ func (a *App) GetMux() *http.ServeMux {
 	return nil
 }
 
+func imapError(ctx context.Context, operation string, err error) error {
+	// Closing the socket to interrupt a command can surface as EOF.
+	if cause := context.Cause(ctx); cause != nil {
+		err = cause
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
 func (a *App) connect(ctx context.Context, updates *imapclient.UnilateralDataHandler) (*imapclient.Client, func(), error) {
 	conn, err := a.dialer.DialContext(ctx, "tcp", a.addr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, imapError(ctx, "IMAP TLS dial", err)
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	c := imapclient.New(conn, &imapclient.Options{
@@ -59,9 +71,13 @@ func (a *App) connect(ctx context.Context, updates *imapclient.UnilateralDataHan
 		stop()
 		c.Close()
 	}
+	if err := c.WaitGreeting(); err != nil {
+		closeClient()
+		return nil, nil, imapError(ctx, "IMAP greeting", err)
+	}
 	if err := c.Login(a.username, a.password).Wait(); err != nil {
 		closeClient()
-		return nil, nil, err
+		return nil, nil, imapError(ctx, "IMAP LOGIN", err)
 	}
 	return c, closeClient, nil
 }

@@ -23,7 +23,7 @@ func (a *App) Watch(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if time.Since(start) > time.Minute {
+		if time.Since(start) > time.Minute && !errors.Is(err, context.DeadlineExceeded) {
 			delay = time.Second
 		}
 		slog.Warn("IMAP listener disconnected", "error", err, "retry_in", delay)
@@ -42,10 +42,10 @@ type inboxCursor struct {
 }
 
 func (a *App) watchSession(ctx context.Context, cursor *inboxCursor, arrived func(uint32, imap.UID)) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	// Bound command waits even when the peer leaves the socket open.
-	timeout := time.AfterFunc(time.Minute, cancel)
+	timeout := time.AfterFunc(time.Minute, func() { cancel(context.DeadlineExceeded) })
 	defer timeout.Stop()
 	changed := make(chan struct{}, 1)
 	c, closeClient, err := a.connect(ctx, &imapclient.UnilateralDataHandler{Mailbox: func(data *imapclient.UnilateralDataMailbox) {
@@ -60,9 +60,10 @@ func (a *App) watchSession(ctx context.Context, cursor *inboxCursor, arrived fun
 		return err
 	}
 	defer closeClient()
+	timeout.Reset(time.Minute)
 	box, err := c.Select("INBOX", &imap.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
-		return err
+		return imapError(ctx, "IMAP EXAMINE INBOX", err)
 	}
 	if box.UIDValidity == 0 || box.UIDNext == 0 {
 		return errors.New("INBOX lacks UIDVALIDITY or UIDNEXT")
@@ -71,13 +72,19 @@ func (a *App) watchSession(ctx context.Context, cursor *inboxCursor, arrived fun
 		cursor.validity, cursor.last = box.UIDValidity, box.UIDNext-1
 	}
 
-	idleSupported := c.Caps().Has(imap.CapIdle)
+	caps := c.Caps()
+	if caps == nil {
+		return imapError(ctx, "IMAP CAPABILITY", errors.New("no capabilities received"))
+	}
+	idleSupported := caps.Has(imap.CapIdle)
+	ready := false
 	for ctx.Err() == nil {
 		if cursor.last < ^imap.UID(0) {
 			uids := imap.UIDSet{{Start: cursor.last + 1, Stop: 0}}
+			timeout.Reset(time.Minute)
 			data, err := c.UIDSearch(&imap.SearchCriteria{UID: []imap.UIDSet{uids}}, nil).Wait()
 			if err != nil {
-				return err
+				return imapError(ctx, "IMAP UID SEARCH", err)
 			}
 			for _, uid := range data.AllUIDs() {
 				// n:* can include the current highest UID even when it is below n.
@@ -91,11 +98,20 @@ func (a *App) watchSession(ctx context.Context, cursor *inboxCursor, arrived fun
 		var idle *imapclient.IdleCommand
 		wait := 30 * time.Second
 		if idleSupported {
+			timeout.Reset(time.Minute)
 			idle, err = c.Idle()
 			if err != nil {
-				return err
+				return imapError(ctx, "IMAP enter IDLE", err)
 			}
 			wait = 25 * time.Minute
+		}
+		if !ready {
+			mode := "poll"
+			if idleSupported {
+				mode = "IDLE"
+			}
+			slog.Info("IMAP listener ready", "folder", "INBOX", "mode", mode)
+			ready = true
 		}
 		timeout.Reset(wait + time.Minute)
 		select {
@@ -107,10 +123,10 @@ func (a *App) watchSession(ctx context.Context, cursor *inboxCursor, arrived fun
 		timeout.Reset(time.Minute)
 		if idle != nil {
 			if err := idle.Close(); err != nil {
-				return err
+				return imapError(ctx, "IMAP leave IDLE", err)
 			}
 			if err := idle.Wait(); err != nil {
-				return err
+				return imapError(ctx, "IMAP IDLE completion", err)
 			}
 		}
 		select {

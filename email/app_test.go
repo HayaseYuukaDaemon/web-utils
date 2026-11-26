@@ -1,12 +1,17 @@
 package email
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -55,6 +60,67 @@ func testMailbox(t *testing.T) (*App, *imapmemserver.User, <-chan struct{}) {
 	app := &App{addr: ln.Addr().String(), username: "tester", password: "test-password",
 		dialer: tls.Dialer{Config: cert.Client().Transport.(*http.Transport).TLSClientConfig}}
 	return app, user, idling
+}
+
+// Some IMAP servers ignore a command received before their greeting.
+func TestConnectWaitsForGreeting(t *testing.T) {
+	cert := httptest.NewTLSServer(nil)
+	cert.Close()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cert.TLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	server := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			server <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.(*tls.Conn).HandshakeContext(t.Context()); err != nil {
+			server <- err
+			return
+		}
+		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		r := bufio.NewReader(conn)
+		if _, err := r.ReadByte(); !errors.Is(err, os.ErrDeadlineExceeded) {
+			server <- fmt.Errorf("expected client to wait for greeting, got read error %v", err)
+			return
+		}
+		conn.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := io.WriteString(conn, "* OK [CAPABILITY IMAP4rev1] ready\r\n"); err != nil {
+			server <- err
+			return
+		}
+		line, err := r.ReadString('\n')
+		if err != nil {
+			server <- err
+			return
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[1] != "LOGIN" {
+			server <- errors.New("expected LOGIN after greeting")
+			return
+		}
+		_, err = fmt.Fprintf(conn, "%s OK [CAPABILITY IMAP4rev1] authenticated\r\n", fields[0])
+		server <- err
+	}()
+	app := &App{addr: ln.Addr().String(), username: "tester", password: "test-password",
+		dialer: tls.Dialer{Config: cert.Client().Transport.(*http.Transport).TLSClientConfig}}
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	_, closeClient, err := app.connect(ctx, nil)
+	if closeClient != nil {
+		defer closeClient()
+	}
+	if serverErr := <-server; serverErr != nil {
+		t.Fatal(serverErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func appendMessage(t *testing.T, user *imapmemserver.User, raw string) *imap.AppendData {
