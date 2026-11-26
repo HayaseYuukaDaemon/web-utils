@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -21,7 +23,7 @@ const NotifyTypeQQ NotifyType = "qq"
 
 type NotifyRequest struct {
 	Title string `json:"title"`
-	Body  string `json:"body"`
+	Body  string `json:"body,omitempty"`
 }
 
 type Notifier interface {
@@ -40,6 +42,47 @@ func (a *NotifyApp) AppName() string {
 }
 
 func (a *NotifyApp) RegisterMCPTools(m *mcp.Server) error {
+	type input struct {
+		ID string `json:"id" jsonschema:"Notifier instance ID (for example qq)"`
+		NotifyRequest
+	}
+	mcp.AddTool(m, &mcp.Tool{
+		Name:        "notify_send",
+		Description: "Send a notification with a title and optional body to the specified notifier.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, any, error) {
+		notifier, ok := a.notifiers[in.ID]
+		if !ok {
+			return nil, nil, fmt.Errorf("no such notifier")
+		}
+		if in.Title == "" {
+			return nil, nil, fmt.Errorf("must has a title")
+		}
+		if err := notifier.Notify(ctx, in.NotifyRequest); err != nil {
+			return nil, nil, fmt.Errorf("error during notify: %w", err)
+		}
+		return nil, nil, nil
+	})
+
+	type notifierInfo struct {
+		ID          string     `json:"id"`
+		Type        NotifyType `json:"type"`
+		Description string     `json:"description"`
+	}
+	type listResult struct {
+		Notifiers []notifierInfo `json:"notifiers"`
+	}
+	mcp.AddTool(m, &mcp.Tool{
+		Name:        "notify_list",
+		Description: "List registered notifiers and their instance IDs for notify_send.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+	}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, listResult, error) {
+		notifiers := make([]notifierInfo, 0, len(a.notifiers))
+		for _, id := range slices.Sorted(maps.Keys(a.notifiers)) {
+			n := a.notifiers[id]
+			notifiers = append(notifiers, notifierInfo{ID: id, Type: n.Type(), Description: n.Desc()})
+		}
+		return nil, listResult{Notifiers: notifiers}, nil
+	})
 	return nil
 }
 
