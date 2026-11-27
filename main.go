@@ -134,7 +134,7 @@ func (m Middleware) handleWellKnown(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (m Middleware) cors(w http.ResponseWriter, r *http.Request) {
+func (m Middleware) cors(w http.ResponseWriter, r *http.Request) bool {
 	headers := w.Header()
 	headers.Add("Vary", "Origin")
 	headers.Add("Vary", "Access-Control-Request-Method")
@@ -145,17 +145,22 @@ func (m Middleware) cors(w http.ResponseWriter, r *http.Request) {
 			headers.Set("Access-Control-Allow-Headers", requestedHeaders)
 		}
 		w.WriteHeader(http.StatusNoContent)
-		return
+		return true
 	}
+	return false
 }
+
+//go:embed authorize.html
+var authorizePage string
 
 func (m Middleware) oauth(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method == http.MethodGet {
 		if r.URL.Path == "/oauth/authorize" {
-			query := r.URL.Query()
-			state := query.Get("state")
-			redirectURI := query.Get("redirect_uri")
-			fmt.Fprintf(w, "fill the code with your token by yourself, and go to %s?state=%s&code=<YOUR_TOKEN>", redirectURI, state)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'")
+			fmt.Fprint(w, authorizePage)
 			return true
 		}
 	}
@@ -186,7 +191,9 @@ func (m Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 处理 CORS
 	if r.Method == http.MethodOptions {
-		m.cors(w, r)
+		if m.cors(w, r) {
+			return
+		}
 	}
 
 	if m.deployDomain != "" {

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>授权访问 web-utils</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f5f7fa; color: #182536; font: 1rem/1.5 Inter, system-ui, sans-serif; }
+    main { max-width: 29rem; margin: 12vh auto; padding: 2rem; background: white; border: 1px solid #d6dde6; border-radius: .75rem; }
+    h1 { margin: 0 0 1rem; font-size: 1.5rem; }
+    p { overflow-wrap: anywhere; }
+    label { display: block; font-weight: 600; }
+    input, button { width: 100%; padding: .65rem .8rem; font: inherit; border-radius: .4rem; }
+    input { margin: .3rem 0 1rem; border: 1px solid #8493a4; }
+    button { border: 0; background: #224d78; color: white; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>授权访问 web-utils</h1>
+    <noscript>请启用 JavaScript 以继续授权。</noscript>
+    <p id="error" hidden>回调地址无效，请从客户端重新发起授权。</p>
+    <form hidden>
+      <p>继续后，<strong id="destination" dir="ltr"></strong> 将收到你的访问令牌。请确认你信任此地址。</p>
+      <label for="token">访问令牌</label>
+      <input id="token" type="password" required autocomplete="off" spellcheck="false">
+      <button type="submit">授权并跳转</button>
+    </form>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const form = document.querySelector("form");
+
+    function callbackURL(value) {
+      let url;
+      try {
+        url = new URL(value);
+      } catch {
+        return null;
+      }
+      if (!url.hostname || url.username || url.password || url.href.includes("#")) return null;
+      const local = url.hostname === "localhost" || url.hostname === "[::1]" ||
+        /^127(?:\.\d+){3}$/.test(url.hostname);
+      return url.protocol === "https:" || (url.protocol === "http:" && local) ? url : null;
+    }
+
+    const callback = callbackURL(params.get("redirect_uri"));
+    if (callback) {
+      document.getElementById("destination").textContent = callback.origin;
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        callback.searchParams.set("code", document.getElementById("token").value);
+        if (params.has("state")) callback.searchParams.set("state", params.get("state"));
+        location.replace(callback.href);
+      });
+      form.hidden = false;
+    } else {
+      document.getElementById("error").hidden = false;
+    }
+  </script>
+</body>
+</html>
