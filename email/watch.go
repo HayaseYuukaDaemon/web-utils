@@ -103,7 +103,7 @@ func (a *App) watchSession(ctx context.Context, cursor *inboxCursor, arrived fun
 			if err != nil {
 				return imapError(ctx, "IMAP enter IDLE", err)
 			}
-			wait = 25 * time.Minute
+			wait = 10 * time.Minute
 		}
 		if !ready {
 			mode := "poll"
